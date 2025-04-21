@@ -129,3 +129,6 @@ yaib_logs/
 *.ckpt
 *.csv
 !demo_data/*/*/attrition.csv
+
+# venv
+*venv/
