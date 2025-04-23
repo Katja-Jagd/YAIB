@@ -224,6 +224,7 @@ class PolarsRegressionPreprocessor(PolarsClassificationPreprocessor):
         outcome_min=None,
         save_cache=None,
         load_cache=None,
+        vars_to_exclude=None,  # ✅ Add this line
     ):
         """
         Args:
