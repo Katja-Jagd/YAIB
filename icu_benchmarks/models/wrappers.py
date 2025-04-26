@@ -633,3 +633,67 @@ class ImputationWrapper(DLWrapper):
         prediction = self.predict_step(data, data_missingness)
         data[data_missingness.bool()] = prediction[data_missingness.bool()]
         return data
+
+
+@gin.configurable("SSLWrapper")
+class SSLWrapper(DLWrapper):
+    """Self-Supervised Learning (SSL) Wrapper specialized for sparse forecasting tasks."""
+
+    _supported_run_modes = [RunMode.regression]
+
+    def __init__(
+        self,
+        loss=torch.nn.MSELoss(),
+        optimizer=torch.optim.Adam,
+        run_mode: RunMode = RunMode.regression,
+        input_shape=None,
+        lr: float = 0.002,
+        momentum: float = 0.9,
+        lr_scheduler: Optional[str] = None,
+        lr_factor: float = 0.99,
+        lr_steps: Optional[List[int]] = None,
+        epochs: int = 100,
+        input_size: Tensor = None,
+        initialization_method: str = "normal",
+        **kwargs,
+    ):
+        super().__init__(
+            loss=loss,
+            optimizer=optimizer,
+            run_mode=run_mode,
+            input_shape=input_shape,
+            lr=lr,
+            momentum=momentum,
+            lr_scheduler=lr_scheduler,
+            lr_factor=lr_factor,
+            lr_steps=lr_steps,
+            epochs=epochs,
+            input_size=input_size,
+            initialization_method=initialization_method,
+            kwargs=kwargs,
+        )
+        self.output_transform = None
+        self.loss_weights = None
+
+    def set_metrics(self, *args):
+        return DLMetrics.REGRESSION
+
+    def step_fn(self, batch, step_prefix=""):
+        past, future, mask = batch
+
+        past = past.float().to(self.device)
+        future = future.float().to(self.device)
+        mask = mask.float().to(self.device)
+
+        prediction = self(past)
+
+        masked_loss = self.loss(prediction[mask.bool()], future[mask.bool()])
+
+        self.log(f"{step_prefix}/loss", masked_loss, on_step=False, on_epoch=True, sync_dist=True)
+
+        for key, metric in self.metrics[step_prefix].items():
+            if isinstance(metric, torchmetrics.Metric):
+                metric.update(prediction[mask.bool()], future[mask.bool()])
+
+        return masked_loss
+
