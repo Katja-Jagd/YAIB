@@ -104,6 +104,32 @@ def execute_repeated_cv(
                 runmode=mode,
                 complete_train=complete_train,
             )
+
+            ### DEBUG ###
+            import os
+            import polars as pl
+            # Path to save the data
+            folder_path = "/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test"
+            # Create the folder if it does not exist
+            os.makedirs(folder_path, exist_ok=True)
+            # Iterate over the dictionary and save each DataFrame as a Parquet file
+            # Iterate over the outer dictionary (train, val, test)
+            for split, split_data in data.items():
+                # Iterate over the inner dictionary (OUTCOME, FEATURES)
+                for key, df in split_data.items():
+                    # Define the file path for each DataFrame
+                    file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
+                    
+                    # Save the DataFrame to a Parquet file
+                    df.write_parquet(file_path)
+                    
+                    # Optionally, print the path to verify where the file is saved
+                    print(f"Saved {key} DataFrame as: {file_path}")
+            
+            print(f'\n\n\n\n\n PREPROCESSED DATA SAVED \n\n\n\n\n')
+
+            ### DEBUG ###
+    
             preprocess_time = datetime.now() - start_time
             start_time = datetime.now()
             agg_loss += train_common(
