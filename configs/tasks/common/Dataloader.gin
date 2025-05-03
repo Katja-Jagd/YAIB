@@ -3,6 +3,8 @@ PredictionPandasDataset.vars = %vars
 PredictionPandasDataset.ram_cache = True
 PredictionPolarsDataset.vars = %vars
 PredictionPolarsDataset.ram_cache = True
+#SSLPolarsDataset.vars = %vars # WAIT UNTIL SSL CLASS IS READY FOR THE LOADER.PY
+#SSLPolarsDataset.ram_cache = True # WAIT UNTIL SSL CLASS IS READY FOR THE LOADER.PY
 # Imputation
 ImputationPandasDataset.vars = %vars
 ImputationPandasDataset.ram_cache = True
