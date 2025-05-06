@@ -41,7 +41,7 @@ class CommonPolarsDataset(Dataset):
             self.row_indicators = self.row_indicators.with_columns(pl.col(self.vars["SEQUENCE"]).dt.total_hours())
             self.features_df = data[split][Segment.features]
             self.features_df = self.features_df.sort([self.vars["GROUP"], self.vars["SEQUENCE"]])
-            self.features_df = self.features_df.drop(self.vars["SEQUENCE"])
+            #self.features_df = self.features_df.drop(self.vars["SEQUENCE"])
         else:
             # We have a static dataset
             logging.info("Using static dataset")
