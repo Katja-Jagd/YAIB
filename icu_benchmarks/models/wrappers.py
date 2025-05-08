@@ -697,3 +697,64 @@ class SSLWrapper(DLWrapper):
 
         return masked_loss
 
+@gin.configurable("CustomDLPredictionWrapper")
+class CustomDLPredictionWrapper(DLWrapper):
+    """Custom wrapper for models using BATPolarsDataset with dynamic/static/time features.
+    Currently supports binary classification. Can be extended to regression and multiclass.
+    """
+    _supported_run_modes = [RunMode.classification, RunMode.regression]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.output_transform = None
+        self.loss_weights = None
+
+    def set_metrics(self, *args):
+        """Setup metrics depending on task."""
+        if self.run_mode == RunMode.classification:
+            # Binary classification (default for now)
+            metrics = DLMetrics.BINARY_CLASSIFICATION
+            self.output_transform = lambda out: (
+                torch.softmax(out[0], dim=1)[:, 1],  # Probability of class 1
+                out[1]  # Ground truth
+            )
+        elif self.run_mode == RunMode.regression:
+            metrics = DLMetrics.REGRESSION
+            self.output_transform = lambda out: out  # No transform needed
+        else:
+            raise ValueError(f"Unsupported run mode: {self.run_mode}")
+        return metrics
+
+    def step_fn(self, batch, step_prefix=""):
+        """
+        Accepts batches from BATPolarsDataset with structure:
+        data, mask, label, times, static, delta, obs_mask
+        Only the first 5 tensors are used by the current model.
+        """
+        data, mask, label, times, static, *_ = batch  # Ignore delta, obs_mask for now
+
+        data = data.to(self.device).float()
+        mask = mask.to(self.device).float()
+        times = times.to(self.device).float()
+        static = static.to(self.device).float()
+        label = label.to(self.device)
+
+        # Forward pass — assumes model accepts named args like in your notebook
+        output = self(data, static=static, time=times, sensor_mask=mask)
+
+        # Loss computation
+        if self.run_mode == RunMode.classification:
+            loss = self.loss(output, label.long())  # CrossEntropyLoss
+        elif self.run_mode == RunMode.regression:
+            loss = self.loss(output.squeeze(), label.float())
+        else:
+            raise ValueError("Unsupported run mode.")
+
+        # Metric updates
+        transformed_output = self.output_transform((output, label))
+        for key, metric in self.metrics[step_prefix].items():
+            metric.update(*transformed_output)
+
+        self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        return loss
+
