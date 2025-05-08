@@ -109,11 +109,6 @@ class PredictionPolarsDataset(CommonPolarsDataset):
         # stay_id = self.outcome_df.index.unique()[idx]  # [self.vars["GROUP"]]
         stay_id = self.outcome_df[self.vars["GROUP"]].unique()[idx]  # [self.vars["GROUP"]]
 
-
-        ### DEBUG ###
-        print(self.features_df.columns)
-        
-        ### DEBUG ###
         # slice to make sure to always return a DF
         # window = self.features_df.loc[stay_id:stay_id].to_numpy()
         # labels = self.outcome_df.loc[stay_id:stay_id][self.vars["LABEL"]].to_numpy(dtype=float)
