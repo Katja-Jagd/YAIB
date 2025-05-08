@@ -9,59 +9,51 @@ import numpy as np
 from torch import nn
 from x_transformers import Encoder
 
+
+# Prediction head classes 
 @gin.configurable
-class BAT(CustomDLPredictionWrapper):
-    """Wrapper to integrate EncoderPrediction with CustomDLPredictionWrapper logic."""
+class BinaryClassificationHead(nn.Module):
+    def __init__(self, input_dim, num_classes):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, num_classes)
 
-    _supported_run_modes = [RunMode.classification, RunMode.regression]
+    def forward(self, x):
+        return self.linear(x)
+    
+@gin.configurable
+class ForecastingHead(nn.Module):
+    def __init__(self, input_dim, forecast_len, sensors_count):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, sensors_count * forecast_len)
+        self.sensors_count = sensors_count
+        self.forecast_len = forecast_len
 
-    def __init__(
-        self,
-        sensors_count: int,
-        max_timepoint_count: int,
-        static_count: int,
-        value_embed_size: int,
-        layers: int,
-        heads: int,
-        dropout: float,
-        attn_dropout: float,
-        use_mask: bool,
-        prediction_head=BinaryClassificationHead,
-        prediction_head_kwargs={"num_classes": 2},
-        lr=1e-4,
-        optimizer=torch.optim.Adam,
-        *args,
-        **kwargs
-    ):
-        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+    def forward(self, x):
+        out = self.linear(x)
+        return out.reshape(-1, self.sensors_count, self.forecast_len)
 
-        # Instantiate encoder
-        encoder = EncoderClassifierCrossParallel(
-            device=self.device,
-            pooling="max",
-            value_embed_size=value_embed_size,
-            layers=layers,
-            heads=heads,
-            dropout=dropout,
-            attn_dropout=attn_dropout,
-            use_mask=use_mask,
-            sensors_count=sensors_count,
-            max_timepoint_count=max_timepoint_count,
-            static_count=static_count,
-        )
+# Own encoder prediction class that plugs R's model to different prediction heads 
+@gin.configurable
+class EncoderPrediction(nn.Module):
+    def __init__(self, encoder_class, prediction_head, prediction_head_kwargs=None):
+        super().__init__()
+        self.encoder_class = encoder_class
+        self.prediction_head = prediction_head
+        self.prediction_head_kwargs = prediction_head_kwargs or {}
+        self.head = None  # Instantiated lazily
 
-        # Compose full prediction model
-        self.model = EncoderPrediction(
-            encoder_class=encoder,
-            prediction_head=prediction_head,
-            prediction_head_kwargs=prediction_head_kwargs,
-        )
+    def forward(self, x, static, time, sensor_mask):
+        features = self.encoder_class(x, static, time, sensor_mask)
 
-        # For compatibility with classification output detection
-        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
+        # Lazily instantiate the head based on input dim 
+        if self.head is None:
+            self.head = self.prediction_head(
+                input_dim=features.shape[1], 
+                **self.prediction_head_kwargs
+                ).to(features.device)
 
-    def forward(self, data, static, time, sensor_mask):
-        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
+        return self.head(features)
+
 
 ### From R's repo 
 def masked_mean_pooling(datatensor, mask):
@@ -151,7 +143,7 @@ class PositionalEncodingTF(nn.Module):
         # pe = pe.cuda()
         return pe
 
-
+@gin.configurable
 class EncoderClassifierCrossParallel(nn.Module):
 
     def __init__(
@@ -461,45 +453,59 @@ class EncoderClassifierCrossParallel(nn.Module):
             )
        
         return nonlinear_merged
+    
+@gin.configurable
+class BAT(CustomDLPredictionWrapper):
+    """Wrapper to integrate EncoderPrediction with CustomDLPredictionWrapper logic."""
 
-# Prediction head classes 
-class BinaryClassificationHead(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, num_classes)
+    _supported_run_modes = [RunMode.classification, RunMode.regression]
 
-    def forward(self, x):
-        return self.linear(x)
+    def __init__(
+        self,
+        input_size,
+        value_embed_size,
+        layers,
+        heads,
+        dropout,
+        attn_dropout,
+        use_mask,
+        prediction_head=BinaryClassificationHead,
+        prediction_head_kwargs={"num_classes": 2},
+        lr=1e-4,
+        optimizer=torch.optim.Adam,
+        *args,
+        **kwargs
+    ):
+        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+        # Extract dimensions from dataset
+        sensors_count = input_size[1]
+        max_timepoint_count = input_size[2]
+        static_count = kwargs.get("static_count", 4)  # fallback if static shape isn't passed
 
-class ForecastingHead(nn.Module):
-    def __init__(self, input_dim, forecast_len, sensors_count):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, sensors_count * forecast_len)
-        self.sensors_count = sensors_count
-        self.forecast_len = forecast_len
+        # Instantiate encoder
+        encoder = EncoderClassifierCrossParallel(
+            device=self.device,
+            pooling="max",
+            value_embed_size=value_embed_size,
+            layers=layers,
+            heads=heads,
+            dropout=dropout,
+            attn_dropout=attn_dropout,
+            use_mask=use_mask,
+            sensors_count=sensors_count,
+            max_timepoint_count=max_timepoint_count,
+            static_count=static_count,
+        )
 
-    def forward(self, x):
-        out = self.linear(x)
-        return out.reshape(-1, self.sensors_count, self.forecast_len)
+        # Compose full prediction model
+        self.model = EncoderPrediction(
+            encoder_class=encoder,
+            prediction_head=prediction_head,
+            prediction_head_kwargs=prediction_head_kwargs,
+        )
 
-# Own encoder prediction class that plugs R's model to different prediction heads 
-class EncoderPrediction(nn.Module):
-    def __init__(self, encoder_class, prediction_head, prediction_head_kwargs=None):
-        super().__init__()
-        self.encoder_class = encoder_class
-        self.prediction_head = prediction_head
-        self.prediction_head_kwargs = prediction_head_kwargs or {}
-        self.head = None  # Instantiated lazily
+        # For compatibility with classification output detection
+        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
 
-    def forward(self, x, static, time, sensor_mask):
-        features = self.encoder_class(x, static, time, sensor_mask)
-
-        # Lazily instantiate the head based on input dim 
-        if self.head is None:
-            self.head = self.prediction_head(
-                input_dim=features.shape[1], 
-                **self.prediction_head_kwargs
-                ).to(features.device)
-
-        return self.head(features)
-
+    def forward(self, data, static, time, sensor_mask):
+        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
