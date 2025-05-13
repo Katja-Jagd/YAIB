@@ -11,7 +11,7 @@ from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar, LearningRateMonitor
 from pathlib import Path
-from icu_benchmarks.data.loader import PredictionPandasDataset, ImputationPandasDataset, PredictionPolarsDataset
+from icu_benchmarks.data.loader import PredictionPandasDataset, ImputationPandasDataset, PredictionPolarsDataset, BATPolarsDataset
 from icu_benchmarks.models.utils import save_config_file, JSONMetricsLogger
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.constants import DataSplit as Split
@@ -85,8 +85,10 @@ def train_common(
     # todo: add support for polars versions of datasets
     dataset_classes = {
         RunMode.imputation: ImputationPandasDataset,
-        RunMode.classification: PredictionPolarsDataset if polars else PredictionPandasDataset,
-        RunMode.regression: PredictionPolarsDataset if polars else PredictionPandasDataset,
+        #RunMode.classification: PredictionPolarsDataset if polars else PredictionPandasDataset,
+        RunMode.classification: BATPolarsDataset,
+        #RunMode.regression: PredictionPolarsDataset if polars else PredictionPandasDataset,
+        RunMode.regression: BATPolarsDataset,
     }
     dataset_class = dataset_classes[mode]
 
