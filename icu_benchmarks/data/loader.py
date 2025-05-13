@@ -11,7 +11,10 @@ import polars as pl
 from icu_benchmarks.imputation.amputations import ampute_data
 from .constants import DataSegment as Segment
 from .constants import DataSplit as Split
-
+# Added together with BATPolarsDataset 
+import torch
+from torch.nn.functional import pad
+from icu_benchmarks.constants import RunMode
 
 @gin.configurable("CommonPolarsDataset")
 class CommonPolarsDataset(Dataset):
@@ -468,3 +471,177 @@ class ImputationPredictionDataset(Dataset):
         window = self.dyn_df.loc[stay_id:stay_id, :]
 
         return from_numpy(window.values).to(float32)
+    
+@gin.configurable("BATPolarsDataset")
+class BATPolarsDataset(CommonPolarsDataset):
+    """Subclass of common dataset for prediction tasks.
+
+    Args:
+        ram_cache (bool, optional): Whether the complete dataset should be stored in ram. Defaults to True.
+    """
+
+    def __init__(self, *args, ram_cache: bool = True, runmode=None, vars: Dict[str, str] = gin.REQUIRED, **kwargs):
+        super().__init__(vars=vars, *args, **kwargs)
+        self.outcome_df = self.grouping_df
+        self.ram_cache(ram_cache)
+        self.runmode = runmode
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Function to sample from the data split of choice. Used for deep learning implementations.
+
+        Args:
+            idx: A specific row index to sample.
+
+        Returns:
+            A sample from the data, consisting of data, labels, padding mask, and other arrays.
+        """
+        if self._cached_dataset is not None:
+            return self._cached_dataset[idx]
+
+        # UNCOMMENT FOR NORMALIZATION OF TIME For normalizing times array (has not been done in preprocessing) 
+        #global_max_time_ms = (
+        #self.features_df.select(pl.col(self.vars["SEQUENCE"]).max()).item().total_seconds() * 1000  # Convert to milliseconds
+        #)
+        
+        # Extracting the stay_id for the specific index
+        stay_id = self.outcome_df[self.vars["GROUP"]].unique()[idx]  
+
+        # Selecting label column 
+        labels = self.outcome_df.filter(pl.col(self.vars["GROUP"]) == stay_id)[self.vars["LABEL"]].to_numpy()
+        
+        # Select dynamic values (excluding stay_id and time columns)
+        dynamic_columns = self.vars["DYNAMIC"]  # Use DYNAMIC columns defined in gin
+        data = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(dynamic_columns).to_numpy()
+        
+        # Select missingness indicators for dynamic features (matching the same order as the dynamic features)
+        missingness_columns = [f'MissingIndicator_{col}' for col in dynamic_columns]
+        mask = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(missingness_columns).to_numpy()
+        mask = (1 - mask)
+
+        # Select static features (assuming they are labeled 'age', 'sex', etc. in the dataset)
+        static_columns = self.vars["STATIC"]  # Use STATIC columns defined in gin
+        static = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(static_columns)[0].to_numpy().flatten()
+
+        # Select timeseries 
+        time_column = self.vars["SEQUENCE"]
+        times_raw = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(time_column).to_numpy().flatten()
+        # tmp solution for times normalization, should be done in preprocessing. See how R did it 
+        times_numeric = (times_raw - times_raw[0]).astype('timedelta64[ms]').astype(np.float32)
+        # NO NORNALIZATION: Convert milliseconds to minutes
+        times = times_numeric / 60000  # 1 minute = 60,000 ms
+        # NORMALIZATION: to [-1, 1] based on global max in milliseconds
+        #times = (times_numeric / global_max_time_ms) * 2 - 1
+
+        # Array containing delta time values 
+        delta = self.get_delta_t(times, data, mask) 
+
+        # Permute 
+        data = data.T
+        mask = mask.T
+        delta = delta.T
+    
+        # Return all of the required arrays as tensors
+        return (
+            torch.from_numpy(data),
+            torch.from_numpy(mask),
+            torch.from_numpy(labels),
+            torch.from_numpy(times),
+            torch.from_numpy(static),
+            torch.from_numpy(delta)
+            )
+    
+    @staticmethod
+    def get_delta_t(times, measurements, measurement_indicators):
+        """
+        From R's repo 
+        Creates array with time difference from the most recent feature measurement.
+        """
+        dt_list = []
+
+        # First observation has delta t = 0
+        first_dt = np.zeros(measurement_indicators.shape[1:], dtype=np.float32)  # (F,)
+        dt_list.append(first_dt)
+
+        last_dt = first_dt.copy()  # Initialize last_dt before the loop
+        for i in range(1, measurement_indicators.shape[0]):
+            # Calculate time difference only for observed values
+            last_dt = np.where(
+                measurement_indicators[i - 1],  # If the previous value was observed
+                np.full_like(last_dt, times[i] - times[i - 1]),  # Compute time difference
+                times[i] - times[i - 1] + last_dt,  # If the previous value was missing, propagate the last valid time difference
+            )
+            dt_list.append(last_dt)
+
+        dt_array = np.stack(dt_list)  # Combine the list of deltas into a single array
+        dt_array = dt_array.astype(np.float32)  # Ensure consistent data type
+        dt_array.shape = measurements.shape  # Reshape to match measurements
+        dt_array = dt_array * ~(measurement_indicators.astype(bool))  # Mask the missing values
+
+        return dt_array
+
+   
+    def collate_fn_pad_to_longest_in_batch(self):
+        """
+        Returns a collate function that pads variable-length time series
+        in a batch to the length of the longest sequence.
+
+        Returns:
+            Callable: A function that pads and stacks:
+                - data, mask, delta: (B, F, T)
+                - times: (B, T)
+                - static: (B, S)
+                - label: (B,) or (B, T) depending on task
+                - obs_mask: (B, T) indicating valid timesteps
+        """
+        def collate_fn(batch):
+            data, mask, labels, times, static, delta = zip(*batch)
+            max_len = max(x.shape[-1] for x in data)
+            original_lengths = [x.shape[-1] for x in data]
+            
+            def pad_2d_tensor(tensor, max_len):
+                pad_amt = max_len - tensor.shape[-1]
+                return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
+            
+            def pad_1d_tensor(tensor, max_len):
+                pad_amt = max_len - tensor.shape[0]
+                return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
+
+            data   = torch.stack([pad_2d_tensor(x, max_len) for x in data])
+            mask   = torch.stack([pad_2d_tensor(x, max_len) for x in mask])
+            delta  = torch.stack([pad_2d_tensor(x, max_len) for x in delta])
+            times  = torch.stack([pad_1d_tensor(x, max_len) for x in times])
+            static = torch.stack(static)
+
+            # In a regression setting there is one label per time bin 
+            if self.runmode == RunMode.regression:
+                labels = torch.stack([pad_1d_tensor(x, max_len) for x in labels])
+            # In a classification setting there is one label per patient/stay_id 
+            else:
+                labels = torch.stack(labels).squeeze()   
+
+            obs_mask = torch.zeros((len(data), max_len), dtype=torch.int32)
+            for i, seq_len in enumerate(original_lengths):
+                obs_mask[i, :seq_len] = 1
+            
+            return data, mask, labels, times, static, delta, obs_mask
+
+        return collate_fn
+    
+    def __len__(self) -> int:
+        """
+        Return the total number of samples in the dataset.
+        """
+        return self.outcome_df[self.vars["GROUP"]].n_unique()
+    
+    def get_balance(self) -> list:
+            """Return the weight balance for the split of interest.
+
+            Returns:
+                Weights for each label.
+            """
+            counts = self.outcome_df[self.vars["LABEL"]].value_counts(parallel=True).get_columns()[1]
+            counts = counts.to_numpy()
+            weights = list((1 / counts) * np.sum(counts) / counts.shape[0])
+            return weights
+
