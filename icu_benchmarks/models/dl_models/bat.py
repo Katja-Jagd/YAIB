@@ -318,12 +318,13 @@ class EncoderClassifierCrossParallel(nn.Module):
 
         with torch.no_grad():
             # add positional encodings
-            pe = self.pos_encoder(time).to(self.device)  # taken from RAINDROP (N, T, pe)
+            #pe = self.pos_encoder(time).to(self.device)  # taken from RAINDROP (N, T, pe) # cpu
+            pe = self.pos_encoder(time).to(x_time.device)  # x_time is on cuda due to pytorch ligtning 
             pe = pe.unsqueeze(2)  # CHECK IF THIS IS RIGHT
             # Repeat the 2nd dimension 36 times
             pe = pe.repeat(1, 1, self.sensors_count, 1)
             pe = torch.permute(pe, (0, 2, 1, 3))  # (N, F, T, 18) 
-        
+
         x_time = torch.add(x_time, pe)  # (N, F, T, 18E)
         del pe
 
