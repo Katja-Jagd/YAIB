@@ -744,7 +744,7 @@ class CustomDLPredictionWrapper(DLWrapper):
 
         # Loss computation
         if self.run_mode == RunMode.classification:
-            loss = self.loss(output, label.long())  # CrossEntropyLoss
+            loss = self.loss(output, label.squeeze().long())  # CrossEntropyLoss
         elif self.run_mode == RunMode.regression:
             loss = self.loss(output.squeeze(), label.float())
         else:
@@ -753,7 +753,13 @@ class CustomDLPredictionWrapper(DLWrapper):
         # Metric updates
         transformed_output = self.output_transform((output, label))
         for key, metric in self.metrics[step_prefix].items():
-            metric.update(*transformed_output)
+            if isinstance(metric, torchmetrics.Metric):
+                # Most torchmetrics metrics (Accuracy, AUROC, etc.)
+                metric.update(*transformed_output)
+            else:
+                # Ignite's EpochMetric expects a single tuple
+                metric.update(transformed_output)
+
 
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
