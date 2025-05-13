@@ -4,7 +4,6 @@ import logging
 import gin
 from pathlib import Path
 from pytorch_lightning import seed_everything
-
 from icu_benchmarks.wandb_utils import wandb_log
 from icu_benchmarks.run_utils import aggregate_results
 from icu_benchmarks.data.split_process_data import preprocess_data
@@ -106,27 +105,27 @@ def execute_repeated_cv(
             )
 
             ### DEBUG ###
-            import os
-            import polars as pl
+            #import os
+            #import polars as pl
             # Path to save the data
-            folder_path = "/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test"
+            #folder_path = "/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test"
             # Create the folder if it does not exist
-            os.makedirs(folder_path, exist_ok=True)
+            #os.makedirs(folder_path, exist_ok=True)
             # Iterate over the dictionary and save each DataFrame as a Parquet file
             # Iterate over the outer dictionary (train, val, test)
-            for split, split_data in data.items():
+            #for split, split_data in data.items():
                 # Iterate over the inner dictionary (OUTCOME, FEATURES)
-                for key, df in split_data.items():
+            #    for key, df in split_data.items():
                     # Define the file path for each DataFrame
-                    file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
+            #        file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
                     
                     # Save the DataFrame to a Parquet file
-                    df.write_parquet(file_path)
+            #        df.write_parquet(file_path)
                     
                     # Optionally, print the path to verify where the file is saved
-                    print(f"Saved {key} DataFrame as: {file_path}")
+            #        print(f"Saved {key} DataFrame as: {file_path}")
             
-            print(f'\n\n\n\n\n PREPROCESSED DATA SAVED \n\n\n\n\n')
+            #print(f'\n\n\n\n\n PREPROCESSED DATA SAVED \n\n\n\n\n')
 
             ### DEBUG ###
     
