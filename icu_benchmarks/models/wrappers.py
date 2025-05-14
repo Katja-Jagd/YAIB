@@ -707,55 +707,72 @@ class CustomDLPredictionWrapper(DLWrapper):
 
 @gin.configurable("SSLWrapper")
 class SSLWrapper(DLWrapper):
-    """
-    SSLWrapper for self-supervised learning with SSLPolarsDataset.
-    Forecasts future values based on observed window.
-    """
-    _supported_run_modes = [RunMode.regression]  # SSL is treated as a regression task
+    _supported_run_modes = [RunMode.regression]
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        clip_grad: bool = False,
+        max_grad_norm: float = 1.0,
+        log_grad_norm: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
-        self.output_transform = lambda out: out  # No transformation for regression
-        self.loss_weights = None  # SSL typically uses unweighted losses
+        self.clip_grad = clip_grad
+        self.max_grad_norm = max_grad_norm
+        self.log_grad_norm = log_grad_norm
+        self.output_transform = lambda out: out
+        self.loss_weights = None
 
     def set_metrics(self, *args):
-        """Use standard regression metrics."""
         return DLMetrics.REGRESSION
 
     def step_fn(self, batch, step_prefix=""):
-        """
-        Accepts batch from SSLPolarsDataset with keys:
-        obs_data, obs_mask, obs_times, forecast_target, forecast_mask, static
-        """
         obs_data, obs_mask, obs_times, obs_delta, forecast_target, forecast_mask, static = batch
-        
-        # Make sure shapes are correct here before passing them in
-        #print(f"[WRAPPER DEBUG] times shape BEFORE model call: {obs_times.shape}")
-        
-        # Move to device and cast types
         obs_data = obs_data.to(self.device).float()
         obs_mask = obs_mask.to(self.device).float()
         obs_times = obs_times.to(self.device).float()
-        obs_delta = obs_delta.to(self.device).float()  # Only if needed
+        obs_delta = obs_delta.to(self.device).float()
         static = static.to(self.device).float()
         forecast_target = forecast_target.to(self.device).float()
         forecast_mask = forecast_mask.to(self.device).float()
 
-        # Forward pass — match model signature
         prediction = self(obs_data, static, obs_times, obs_mask)
-
-        # Apply forecast mask to both prediction and target
         masked_pred = torch.masked_select(prediction, forecast_mask.bool())
         masked_target = torch.masked_select(forecast_target, forecast_mask.bool())
 
         loss = self.loss(masked_pred, masked_target)
 
-        # Log metrics
         transformed_output = self.output_transform((masked_pred, masked_target))
         for key, metric in self.metrics[step_prefix].items():
             metric.update(transformed_output)
 
-
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
+
+    # After loss.backward() but before optimizer.step() 
+    def on_after_backward(self):
+        total_norm_before = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm_before += param_norm.item() ** 2
+        total_norm_before = total_norm_before ** 0.5
+
+        # Clip gradients (in-place)
+        if self.clip_grad:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
+
+        # Recompute total norm after clipping
+        total_norm_after = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm_after += param_norm.item() ** 2
+        total_norm_after = total_norm_after ** 0.5
+
+        if self.log_grad_norm:
+            self.log("grad_norm/pre_clip", total_norm_before, on_step=True, on_epoch=False)
+            self.log("grad_norm/post_clip", total_norm_after, on_step=True, on_epoch=False)
+            self.log("grad_norm/clipping_ratio", total_norm_after / (total_norm_before + 1e-8), on_step=True, on_epoch=False)
+
     
