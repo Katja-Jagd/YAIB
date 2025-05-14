@@ -2,7 +2,7 @@
 #!/bin/sh 
 ### General options  
 ### -- specify queue -- 
-#BSUB -q gpua100
+#BSUB -q gpuv100
 ### -- set the job Name -- 
 #BSUB -J YAIB
 ### -- ask for number of cores (default: 1) -- 
@@ -15,7 +15,7 @@
 ### -- specify that we want the job to get killed if it exceeds 5 GB per core/slot -- 
 #BSUB -M 5GB
 ### -- set walltime limit: hh:mm -- 
-#BSUB -W 48:00 
+#BSUB -W 24:00 
 ### -- set the email address -- 
 # please uncomment the following line and put in your e-mail address,
 # if you want to receive e-mail notifications on a non-default address
@@ -26,12 +26,12 @@
 #BSUB -N 
 
 ### -- specify the output and error file inside the run folder -- 
-#BSUB -o /work3/s185395/yaib/hpc_output/Output_%J.out
-#BSUB -e /work3/s185395/yaib/hpc_output/Output_%J.err
+#BSUB -o /work3/s185395/YAIB/hpc_output/SLL_output_%J.out
+#BSUB -e /work3/s185395/YAIB/hpc_output/SLL_output_%J.err
 
 # Activate venv  and load modules 
 module load python3/3.10.16
 source yaib_venv/bin/activate
 
 # Execute command
-icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/mortality24/mimic     -n mimic     -t BinaryClassification     -tn Mortality24     -m BAT     -gc     -lc     -s 2222     -l ../yaib_logs/     --tune  --wandb-sweep
+icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/los/mimic     -n mimic     -t Regression     -tn LOS     -m SSL_BAT     -gc     -lc     -s 2222     -l ../yaib_logs/     --tune --wandb-sweep
