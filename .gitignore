@@ -136,3 +136,7 @@ yaib_logs/
 # Some preprocessed data, to understand the data better TMP
 icu_benchmarks/data/preprocessed_data_test/
 /work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test/*.parquet
+
+# HPC output and error logs 
+hpc_output/
+
