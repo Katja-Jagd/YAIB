@@ -11,7 +11,7 @@ from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar, LearningRateMonitor
 from pathlib import Path
-from icu_benchmarks.data.loader import PredictionPandasDataset, ImputationPandasDataset, PredictionPolarsDataset, BATPolarsDataset
+from icu_benchmarks.data.loader import PredictionPandasDataset, ImputationPandasDataset, PredictionPolarsDataset, BATPolarsDataset, SSLPolarsDataset
 from icu_benchmarks.models.utils import save_config_file, JSONMetricsLogger
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.constants import DataSplit as Split
@@ -86,9 +86,11 @@ def train_common(
     dataset_classes = {
         RunMode.imputation: ImputationPandasDataset,
         #RunMode.classification: PredictionPolarsDataset if polars else PredictionPandasDataset,
-        RunMode.classification: BATPolarsDataset,
+        #RunMode.classification: BATPolarsDataset,
+        RunMode.classification: SSLPolarsDataset,
         #RunMode.regression: PredictionPolarsDataset if polars else PredictionPandasDataset,
-        RunMode.regression: BATPolarsDataset,
+        #RunMode.regression: BATPolarsDataset,
+        RunMode.regression: SSLPolarsDataset,
     }
     dataset_class = dataset_classes[mode]
 
@@ -105,6 +107,14 @@ def train_common(
             f"Training on {train_dataset.name} with {len(train_dataset)} samples and validating on {val_dataset.name} with"
             f" {len(val_dataset)} samples."
         )
+
+    if hasattr(train_dataset, "collate_fn_ssl_windows"):
+        collate_fn = train_dataset.collate_fn_ssl_windows()
+    elif hasattr(train_dataset, "collate_fn_pad_to_longest_in_batch"):
+        collate_fn = train_dataset.collate_fn_pad_to_longest_in_batch()
+    else:
+        collate_fn = None  # Use PyTorch default
+
     logging.info(f"Using {num_workers} workers for data loading.")
     train_loader = DataLoader(
         train_dataset,
@@ -113,6 +123,8 @@ def train_common(
         num_workers=num_workers,
         drop_last=True,
         persistent_workers=persistent_workers,
+        collate_fn=collate_fn,
+
     )
     val_loader = DataLoader(
         val_dataset,
@@ -121,6 +133,7 @@ def train_common(
         num_workers=num_workers,
         drop_last=True,
         persistent_workers=persistent_workers,
+        collate_fn=collate_fn,
     )
 
     data_shape = next(iter(train_loader))[0].shape
@@ -185,6 +198,7 @@ def train_common(
             pin_memory=True,
             drop_last=True,
             persistent_workers=persistent_workers,
+            collate_fn=collate_fn,
         )
         if model.requires_backprop
         else DataLoader([test_dataset.to_tensor()], batch_size=1)
