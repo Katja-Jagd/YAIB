@@ -505,8 +505,8 @@ class BAT(CustomDLPredictionWrapper):
             prediction_head_kwargs=prediction_head_kwargs,
         )
 
-        # For compatibility with classification output detection
-        #self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
+        # Helps CustomDLPredictionWrapper with setting binary classification metrics 
+        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
