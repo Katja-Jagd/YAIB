@@ -15,6 +15,8 @@ from .constants import DataSplit as Split
 import torch
 from torch.nn.functional import pad
 from icu_benchmarks.constants import RunMode
+# Added together witl SSLPolarsDataset
+import random 
 
 @gin.configurable("CommonPolarsDataset")
 class CommonPolarsDataset(Dataset):
@@ -613,8 +615,9 @@ class BATPolarsDataset(CommonPolarsDataset):
             times  = torch.stack([pad_1d_tensor(x, max_len) for x in times])
             static = torch.stack(static)
 
+            #print(f"\n \n \n DEBUG RunMode: {self.runmode} \n \n \n")
             # In a regression setting there is one label per time bin 
-            if self.runmode == RunMode.regression:
+            if self.runmode == "regression":
                 labels = torch.stack([pad_1d_tensor(x, max_len) for x in labels])
             # In a classification setting there is one label per patient/stay_id 
             else:
@@ -644,4 +647,87 @@ class BATPolarsDataset(CommonPolarsDataset):
             counts = counts.to_numpy()
             weights = list((1 / counts) * np.sum(counts) / counts.shape[0])
             return weights
+    
+
+@gin.configurable("SSLPolarsDataset")
+class SSLPolarsDataset(BATPolarsDataset):
+    def __init__(self, *args, max_obs=24, forecast_horizon=2, runmode=None, **kwargs):
+        """
+        SSL dataset that slices each batch into observation and forecasting windows.
+
+        Args:
+            max_obs (int): Length of the observation window in time bins (e.g., 24 = 24h).
+            forecast_horizon (int): Length of the forecasting window in time bins (e.g., 2 = 2h).
+        """
+        super().__init__(*args, runmode=runmode, **kwargs)
+        self.max_obs = max_obs
+        self.forecast_horizon = forecast_horizon
+
+    def collate_fn_ssl_windows(self):
+        base_collate = super().collate_fn_pad_to_longest_in_batch()
+
+        def collate_fn(batch):
+            data, mask, label, times, static, delta, obs_mask = base_collate(batch)
+
+            #print(f'\n \n \n DEBUG TIMES SHAPE IN BATCH: {times.shape} \n \n \n')
+            B, C, T = data.shape
+
+            t1_ix = None
+            tries = 0
+            max_tries = B  # Retry up to one attempt per patient in the batch
+
+            while t1_ix is None and tries < max_tries:
+                patient_idx = random.randint(0, B - 1)
+                patient_mask = obs_mask[patient_idx].bool()
+                valid_indices = torch.where(patient_mask)[0]
+
+                # Enforce: minimum 12 time bins of history and room for forecast
+                valid_indices = valid_indices[valid_indices >= 12]
+                valid_indices = valid_indices[valid_indices <= valid_indices[-1] - self.forecast_horizon]
+
+                if len(valid_indices) > 0:
+                    t1_ix = int(np.random.choice(valid_indices.cpu().numpy()))
+                    break
+
+                tries += 1
+
+            if t1_ix is None:
+                raise ValueError("No valid t1 index found in batch after retrying.")
+
+            t0_ix = max(0, t1_ix - self.max_obs)
+            t2_ix = t1_ix + self.forecast_horizon
+
+            # Slice all patients at same window
+            obs_data = data[:, :, t0_ix:t1_ix]
+            obs_mask_out = mask[:, :, t0_ix:t1_ix]
+            obs_times = times[:, t0_ix:t1_ix]
+            obs_delta = delta[:, :, t0_ix:t1_ix]
+
+            forecast_target = data[:, :, t1_ix:t2_ix]
+            forecast_mask = mask[:, :, t1_ix:t2_ix]
+
+            #return {
+            #        'obs_data': obs_data,
+            #        'obs_mask': obs_mask_out,
+            #        'obs_times': obs_times,
+            #        'obs_delta': obs_delta,
+            #        'forecast_target': forecast_target,
+            #        'forecast_mask': forecast_mask,
+            #        'static': static,
+                    #'debug': {  # UNCOMMENT FOR DEBUGGING
+                    #    't0_ix': t0_ix,
+                    #    't1_ix': t1_ix,
+                    #    't2_ix': t2_ix
+                    #    }
+            #        }
+            return (
+                obs_data,
+                obs_mask_out,
+                obs_times,
+                obs_delta,
+                forecast_target,
+                forecast_mask,
+                static,
+                )
+        return collate_fn
 
