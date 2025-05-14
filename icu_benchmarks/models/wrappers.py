@@ -71,6 +71,10 @@ class BaseModule(LightningModule):
             weight = FloatTensor(weight).to(self.device)
         elif weight == "balanced":
             weight = FloatTensor(dataset.get_balance()).to(self.device)
+        # ADDED CHOICE TO DO NO WEIGHTED LOSS
+        # Use in gin: train_common.weight = "none"
+        elif isinstance(weight, str) and weight.lower() == "none":
+            weight = None
         self.loss_weights = weight
 
     def training_step(self, batch, batch_idx):
@@ -634,69 +638,6 @@ class ImputationWrapper(DLWrapper):
         data[data_missingness.bool()] = prediction[data_missingness.bool()]
         return data
 
-
-@gin.configurable("SSLWrapper")
-class SSLWrapper(DLWrapper):
-    """Self-Supervised Learning (SSL) Wrapper specialized for sparse forecasting tasks."""
-
-    _supported_run_modes = [RunMode.regression]
-
-    def __init__(
-        self,
-        loss=torch.nn.MSELoss(),
-        optimizer=torch.optim.Adam,
-        run_mode: RunMode = RunMode.regression,
-        input_shape=None,
-        lr: float = 0.002,
-        momentum: float = 0.9,
-        lr_scheduler: Optional[str] = None,
-        lr_factor: float = 0.99,
-        lr_steps: Optional[List[int]] = None,
-        epochs: int = 100,
-        input_size: Tensor = None,
-        initialization_method: str = "normal",
-        **kwargs,
-    ):
-        super().__init__(
-            loss=loss,
-            optimizer=optimizer,
-            run_mode=run_mode,
-            input_shape=input_shape,
-            lr=lr,
-            momentum=momentum,
-            lr_scheduler=lr_scheduler,
-            lr_factor=lr_factor,
-            lr_steps=lr_steps,
-            epochs=epochs,
-            input_size=input_size,
-            initialization_method=initialization_method,
-            kwargs=kwargs,
-        )
-        self.output_transform = None
-        self.loss_weights = None
-
-    def set_metrics(self, *args):
-        return DLMetrics.REGRESSION
-
-    def step_fn(self, batch, step_prefix=""):
-        past, future, mask = batch
-
-        past = past.float().to(self.device)
-        future = future.float().to(self.device)
-        mask = mask.float().to(self.device)
-
-        prediction = self(past)
-
-        masked_loss = self.loss(prediction[mask.bool()], future[mask.bool()])
-
-        self.log(f"{step_prefix}/loss", masked_loss, on_step=False, on_epoch=True, sync_dist=True)
-
-        for key, metric in self.metrics[step_prefix].items():
-            if isinstance(metric, torchmetrics.Metric):
-                metric.update(prediction[mask.bool()], future[mask.bool()])
-
-        return masked_loss
-
 @gin.configurable("CustomDLPredictionWrapper")
 class CustomDLPredictionWrapper(DLWrapper):
     """Custom wrapper for models using BATPolarsDataset with dynamic/static/time features.
@@ -764,3 +705,57 @@ class CustomDLPredictionWrapper(DLWrapper):
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
+@gin.configurable("SSLWrapper")
+class SSLWrapper(DLWrapper):
+    """
+    SSLWrapper for self-supervised learning with SSLPolarsDataset.
+    Forecasts future values based on observed window.
+    """
+    _supported_run_modes = [RunMode.regression]  # SSL is treated as a regression task
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.output_transform = lambda out: out  # No transformation for regression
+        self.loss_weights = None  # SSL typically uses unweighted losses
+
+    def set_metrics(self, *args):
+        """Use standard regression metrics."""
+        return DLMetrics.REGRESSION
+
+    def step_fn(self, batch, step_prefix=""):
+        """
+        Accepts batch from SSLPolarsDataset with keys:
+        obs_data, obs_mask, obs_times, forecast_target, forecast_mask, static
+        """
+        obs_data, obs_mask, obs_times, obs_delta, forecast_target, forecast_mask, static = batch
+        
+        # Make sure shapes are correct here before passing them in
+        #print(f"[WRAPPER DEBUG] times shape BEFORE model call: {obs_times.shape}")
+        
+        # Move to device and cast types
+        obs_data = obs_data.to(self.device).float()
+        obs_mask = obs_mask.to(self.device).float()
+        obs_times = obs_times.to(self.device).float()
+        obs_delta = obs_delta.to(self.device).float()  # Only if needed
+        static = static.to(self.device).float()
+        forecast_target = forecast_target.to(self.device).float()
+        forecast_mask = forecast_mask.to(self.device).float()
+
+        # Forward pass — match model signature
+        prediction = self(obs_data, static, obs_times, obs_mask)
+
+        # Apply forecast mask to both prediction and target
+        masked_pred = torch.masked_select(prediction, forecast_mask.bool())
+        masked_target = torch.masked_select(forecast_target, forecast_mask.bool())
+
+        loss = self.loss(masked_pred, masked_target)
+
+        # Log metrics
+        transformed_output = self.output_transform((masked_pred, masked_target))
+        for key, metric in self.metrics[step_prefix].items():
+            metric.update(transformed_output)
+
+
+        self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        return loss
+    
