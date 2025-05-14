@@ -679,17 +679,28 @@ class SSLPolarsDataset(BATPolarsDataset):
             while t1_ix is None and tries < max_tries:
                 patient_idx = random.randint(0, B - 1)
                 patient_mask = obs_mask[patient_idx].bool()
+
                 valid_indices = torch.where(patient_mask)[0]
 
-                # Enforce: minimum 12 time bins of history and room for forecast
+                # Enforce: minimum 12 time bins of history
                 valid_indices = valid_indices[valid_indices >= 12]
-                valid_indices = valid_indices[valid_indices <= valid_indices[-1] - self.forecast_horizon]
 
-                if len(valid_indices) > 0:
-                    t1_ix = int(np.random.choice(valid_indices.cpu().numpy()))
-                    break
+                # Make sure there's at least one candidate to compute with
+                if len(valid_indices) == 0:
+                    tries += 1
+                    continue
 
-                tries += 1
+                # Enforce: space for forecast_horizon
+                max_index = valid_indices[-1]
+                valid_indices = valid_indices[valid_indices <= max_index - self.forecast_horizon]
+
+                if len(valid_indices) == 0:
+                    tries += 1
+                    continue
+
+                t1_ix = int(np.random.choice(valid_indices.cpu().numpy()))
+                break
+
 
             if t1_ix is None:
                 raise ValueError("No valid t1 index found in batch after retrying.")
