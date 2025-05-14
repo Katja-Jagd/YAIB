@@ -282,3 +282,11 @@ def get_smoothed_labels(
         return np.array(
             list(map(lambda x: smoothing_fn(x, h_true=h_true, h_min=h_min, h_max=h_max, delta_h=delta_h, gamma=gamma), dte))
         )
+
+def get_collate_fn(dataset):
+    if hasattr(dataset, "collate_fn_ssl_windows"):
+        return dataset.collate_fn_ssl_windows()
+    elif hasattr(dataset, "collate_fn_pad_to_longest_in_batch"):
+        return dataset.collate_fn_pad_to_longest_in_batch()
+    else:
+        return None
