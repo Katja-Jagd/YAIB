@@ -12,7 +12,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar, LearningRateMonitor
 from pathlib import Path
 from icu_benchmarks.data.loader import PredictionPandasDataset, ImputationPandasDataset, PredictionPolarsDataset, BATPolarsDataset, SSLPolarsDataset
-from icu_benchmarks.models.utils import save_config_file, JSONMetricsLogger
+from icu_benchmarks.models.utils import save_config_file, JSONMetricsLogger, get_collate_fn
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.constants import DataSplit as Split
 
@@ -34,6 +34,7 @@ def train_common(
     source_dir: Path = None,
     reproducible: bool = True,
     mode: str = RunMode.classification,
+    dataset_class=gin.REQUIRED, # ADDED FOR RESTRUCTURING HOW TO CHOOSE DATASETCLASS 
     model: object = gin.REQUIRED,
     weight: str = None,
     optimizer: type = Adam,
@@ -83,16 +84,15 @@ def train_common(
 
     logging.info(f"Training model: {model.__name__}.")
     # todo: add support for polars versions of datasets
-    dataset_classes = {
-        RunMode.imputation: ImputationPandasDataset,
+    #dataset_classes = {
+        #RunMode.imputation: ImputationPandasDataset,
         #RunMode.classification: PredictionPolarsDataset if polars else PredictionPandasDataset,
         #RunMode.classification: BATPolarsDataset,
-        RunMode.classification: SSLPolarsDataset,
+        #RunMode.classification: SSLPolarsDataset,
         #RunMode.regression: PredictionPolarsDataset if polars else PredictionPandasDataset,
         #RunMode.regression: BATPolarsDataset,
-        RunMode.regression: SSLPolarsDataset,
-    }
-    dataset_class = dataset_classes[mode]
+        #RunMode.regression: SSLPolarsDataset,
+    #}
 
     logging.info(f"Using dataset class: {dataset_class.__name__}.")
     logging.info(f"Logging to directory: {log_dir}.")
@@ -108,12 +108,9 @@ def train_common(
             f" {len(val_dataset)} samples."
         )
 
-    if hasattr(train_dataset, "collate_fn_ssl_windows"):
-        collate_fn = train_dataset.collate_fn_ssl_windows()
-    elif hasattr(train_dataset, "collate_fn_pad_to_longest_in_batch"):
-        collate_fn = train_dataset.collate_fn_pad_to_longest_in_batch()
-    else:
-        collate_fn = None  # Use PyTorch default
+    collate_fn = get_collate_fn(train_dataset)
+
+    print(f'[DEBUG] collate_fn: {collate_fn}')
 
     logging.info(f"Using {num_workers} workers for data loading.")
     train_loader = DataLoader(
