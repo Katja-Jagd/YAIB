@@ -1,7 +1,7 @@
 import gin
 from torch import nn as nn
 from icu_benchmarks.constants import RunMode
-from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper
+from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper
 
 # From BAT
 import torch
@@ -506,7 +506,60 @@ class BAT(CustomDLPredictionWrapper):
         )
 
         # For compatibility with classification output detection
-        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
+        #self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
+
+    def forward(self, data, static, time, sensor_mask):
+        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
+    
+@gin.configurable
+class SSL_BAT(SSLWrapper):
+    """Wrapper to integrate EncoderPrediction with CustomDLPredictionWrapper logic."""
+
+    _supported_run_modes = [RunMode.classification, RunMode.regression]
+
+    def __init__(
+        self,
+        input_size,
+        value_embed_size,
+        layers,
+        heads,
+        dropout,
+        attn_dropout,
+        use_mask,
+        prediction_head=ForecastingHead,
+        prediction_head_kwargs={"sensors_count": 48, "forecast_len": 2},
+        lr=1e-4,
+        optimizer=torch.optim.Adam,
+        *args,
+        **kwargs
+    ):
+        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+        # Extract dimensions from dataset
+        sensors_count = input_size[1]
+        max_timepoint_count = input_size[2]
+        static_count = kwargs.get("static_count", 4)  # fallback if static shape isn't passed
+
+        # Instantiate encoder
+        encoder = EncoderClassifierCrossParallel(
+            device=self.device,
+            pooling="max",
+            value_embed_size=value_embed_size,
+            layers=layers,
+            heads=heads,
+            dropout=dropout,
+            attn_dropout=attn_dropout,
+            use_mask=use_mask,
+            sensors_count=sensors_count,
+            max_timepoint_count=max_timepoint_count,
+            static_count=static_count,
+        )
+
+        # Compose full prediction model
+        self.model = EncoderPrediction(
+            encoder_class=encoder,
+            prediction_head=prediction_head,
+            prediction_head_kwargs=prediction_head_kwargs,
+        )
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
