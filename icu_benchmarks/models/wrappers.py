@@ -674,12 +674,11 @@ class CustomDLPredictionWrapper(DLWrapper):
         """
         data, mask, label, times, static, *_ = batch  # Ignore delta, obs_mask for now
 
-        # Needs to be float16 to perform flash attention 
-        data = data.to(dtype=torch.float16, device=self.device)
-        mask = mask.to(dtype=torch.float16, device=self.device)
-        times = times.to(dtype=torch.float16, device=self.device)
-        static = static.to(dtype=torch.float16, device=self.device)
-        label = label.to(dtype=torch.float16, device=self.device)
+        data = data.to(self.device).float()
+        mask = mask.to(self.device).float()
+        times = times.to(self.device).float()
+        static = static.to(self.device).float()
+        label = label.to(self.device)
 
         # Forward pass — assumes model accepts named args like in your notebook
         output = self(data, static=static, time=times, sensor_mask=mask)
@@ -729,15 +728,22 @@ class SSLWrapper(DLWrapper):
 
     def step_fn(self, batch, step_prefix=""):
         obs_data, obs_mask, obs_times, obs_delta, forecast_target, forecast_mask, static = batch
-        
-         # Needs to be float16 to perform flash attention
-        obs_data = obs_data.to(dtype=torch.float16, device=self.device)
-        obs_mask = obs_mask.to(dtype=torch.float16, device=self.device)
-        obs_times = obs_times.to(dtype=torch.float16, device=self.device)
-        obs_delta = obs_delta.to(dtype=torch.float16, device=self.device)
-        static = static.to(dtype=torch.float16, device=self.device)
-        forecast_target = forecast_target.to(dtype=torch.float16, device=self.device)
-        forecast_mask = forecast_mask.to(dtype=torch.float16, device=self.device)
+        obs_data = obs_data.to(self.device).float()
+        obs_mask = obs_mask.to(self.device).float()
+        obs_times = obs_times.to(self.device).float()
+        obs_delta = obs_delta.to(self.device).float()
+        static = static.to(self.device).float()
+        forecast_target = forecast_target.to(self.device).float()
+        forecast_mask = forecast_mask.to(self.device).float()
+
+        # Needs to be float16 to perform flash attention
+        #obs_data = obs_data.to(dtype=torch.float16, device=self.device)
+        #obs_mask = obs_mask.to(dtype=torch.float16, device=self.device)
+        #obs_times = obs_times.to(dtype=torch.float16, device=self.device)
+        #obs_delta = obs_delta.to(dtype=torch.float16, device=self.device)
+        #static = static.to(dtype=torch.float16, device=self.device)
+        #forecast_target = forecast_target.to(dtype=torch.float16, device=self.device)
+        #forecast_mask = forecast_mask.to(dtype=torch.float16, device=self.device)
 
         prediction = self(obs_data, static, obs_times, obs_mask)
         masked_pred = torch.masked_select(prediction, forecast_mask.bool())
