@@ -3,6 +3,7 @@
 ### General options  
 ### -- specify queue -- 
 #BSUB -q gpuv100
+#BSUB -R "select[gpu32gb]"
 ### -- set the job Name -- 
 #BSUB -J YAIB
 ### -- ask for number of cores (default: 1) -- 
@@ -34,4 +35,4 @@ module load python3/3.10.16
 source yaib_venv/bin/activate
 
 # Execute command
-icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/los/mimic     -n mimic     -t Regression     -tn LOS     -m SSL_BAT     -gc     -lc     -s 2222     -l ../yaib_logs/     --tune --wandb-sweep
+icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/los/eicu_miiv_None     -n eicu_miiv     -t Regression     -tn LOS     -m SSL_BAT     -gc     -lc     -s 2222     -l ../yaib_logs/     --tune --wandb-sweep
