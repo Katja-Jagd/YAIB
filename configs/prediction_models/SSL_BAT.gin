@@ -6,7 +6,7 @@ include "configs/prediction_models/common/DLCommon.gin"
 # Dataset
 SSLPolarsDataset.runmode = "regression"
 SSLWrapper.clip_grad = True
-SSLWrapper.max_grad_norm = 0.5
+SSLWrapper.max_grad_norm = 0.3
 SSLWrapper.log_grad_norm = True
 SSLWrapper.loss = @mse_loss
 
