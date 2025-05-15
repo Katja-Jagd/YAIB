@@ -9,7 +9,7 @@ BATPolarsDataset.runmode = "classification"
 # Train params
 train_common.model = @BAT
 train_common.dataset_class = @BATPolarsDataset
-train_common.precision = 16 # Added to hopefully help with flash attention compatibility with float16 and not float32 
+#train_common.precision = 16 # Added to hopefully help with flash attention compatibility with float16 and not float32 
 
 
 # Optimizer params

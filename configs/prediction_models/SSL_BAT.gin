@@ -13,7 +13,7 @@ SSLWrapper.loss = @mse_loss
 # Train params
 train_common.model = @SSL_BAT
 train_common.weight = "none" # ADDED CAUSE MY SSLPolarsDataset CLASS DOES NOT HAVE A get_balance() METHOD
-train_common.precision = 16 # Added to hopefully help with flash attention compatibility with float16 and not float32 
+#train_common.precision = 16 # Added to hopefully help with flash attention compatibility with float16 and not float32 
 
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
