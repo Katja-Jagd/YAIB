@@ -6,7 +6,7 @@ include "configs/prediction_models/common/DLCommon.gin"
 # Dataset
 SSLPolarsDataset.runmode = "regression"
 SSLWrapper.clip_grad = True
-SSLWrapper.max_grad_norm = 0.3
+SSLWrapper.max_grad_norm = 0.5
 SSLWrapper.log_grad_norm = True
 SSLWrapper.loss = @mse_loss
 
@@ -38,7 +38,7 @@ model/hyperparameter.prediction_head_kwargs = {
 
 # Train params
 train_common.epochs = 50
-train_common.batch_size = 16
+train_common.batch_size = 64
 train_common.patience = 10
 train_common.min_delta = 1e-4
 
