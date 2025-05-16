@@ -196,7 +196,8 @@ class EncoderClassifierCrossParallel(nn.Module):
             heads=heads,
             attn_dropout=attn_dropout,
             ff_dropout=dropout,
-            attn_flash=True,
+            #attn_flash=True,
+            attn_flash=False, # so it can run on a100 
 
         )
 
@@ -206,7 +207,8 @@ class EncoderClassifierCrossParallel(nn.Module):
             heads=heads,
             attn_dropout=attn_dropout,
             ff_dropout=dropout,
-            attn_flash=True,
+            #attn_flash=True,
+            attn_flash=False, # so it can run on a100 
         )
 
         self.sensor_encoding = torch.nn.Embedding(
