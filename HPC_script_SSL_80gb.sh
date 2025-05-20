@@ -3,6 +3,7 @@
 ### General options  
 ### -- specify queue -- 
 #BSUB -q gpua100
+#BSUB -R "select[gpu80gb]"
 ### -- set the job Name -- 
 #BSUB -J YAIB
 ### -- ask for number of cores (default: 1) -- 
