@@ -18,6 +18,8 @@ from icu_benchmarks.constants import RunMode
 # Added together witl SSLPolarsDataset
 import random 
 
+import time # [DEBUG]
+import os #[ DEBUG]
 @gin.configurable("CommonPolarsDataset")
 class CommonPolarsDataset(Dataset):
     def __init__(
@@ -59,6 +61,7 @@ class CommonPolarsDataset(Dataset):
         self.name = name
 
     def ram_cache(self, cache: bool = True):
+        print(f"[DEBUG] ram_cache() called with cache={cache}")
         self._cached_dataset = None
         if cache:
             logging.info(f"Caching {self.split} dataset in ram.")
@@ -473,7 +476,48 @@ class ImputationPredictionDataset(Dataset):
         window = self.dyn_df.loc[stay_id:stay_id, :]
 
         return from_numpy(window.values).to(float32)
-    
+
+class PadToLongestCollator:
+    def __init__(self, runmode, pad_1d_tensor, pad_2d_tensor):
+        self.runmode = runmode
+        self.pad_1d_tensor = pad_1d_tensor
+        self.pad_2d_tensor = pad_2d_tensor
+
+    def __call__(self, batch):
+        #print(f"[DEBUG] PadToLongestCollator called in pid={os.getpid()}, batch size={len(batch)}")
+
+        data, mask, labels, times, static, delta = zip(*batch)
+        #print("[DEBUG] Unpacked batch")
+
+        max_len = max(x.shape[-1] for x in data)
+        orig_lens = [x.shape[-1] for x in data]
+        #print(f"[DEBUG] max_len={max_len}")
+
+        data = torch.stack([self.pad_2d_tensor(x, max_len) for x in data])
+        #print("[DEBUG] data padded")
+
+        mask = torch.stack([self.pad_2d_tensor(x, max_len) for x in mask])
+        delta = torch.stack([self.pad_2d_tensor(x, max_len) for x in delta])
+        #print("[DEBUG] mask and delta padded")
+
+        times = torch.stack([self.pad_1d_tensor(x, max_len) for x in times])
+        static = torch.stack(static)
+        #print("[DEBUG] times and static padded")
+
+        if self.runmode == "regression":
+            labels = torch.stack([self.pad_1d_tensor(x, max_len) for x in labels])
+        else:
+            labels = torch.stack(labels).squeeze()
+        #print("[DEBUG] labels padded")
+
+        obs_mask = torch.zeros((len(data), max_len), dtype=torch.int32)
+        for i, l in enumerate(orig_lens):
+            obs_mask[i, :l] = 1
+        #print("[DEBUG] obs_mask computed")
+
+        return data, mask, labels, times, static, delta, obs_mask
+
+
 @gin.configurable("BATPolarsDataset")
 class BATPolarsDataset(CommonPolarsDataset):
     """Subclass of common dataset for prediction tasks.
@@ -485,9 +529,54 @@ class BATPolarsDataset(CommonPolarsDataset):
     def __init__(self, *args, ram_cache: bool = True, runmode=None, vars: Dict[str, str] = gin.REQUIRED, **kwargs):
         super().__init__(vars=vars, *args, **kwargs)
         self.outcome_df = self.grouping_df
-        self.ram_cache(ram_cache)
         self.runmode = runmode
+        self._stay_ids = self.outcome_df[self.vars["GROUP"]].unique().to_numpy()
 
+
+        #print(f"[DEBUG] BATPolarsDataset __init__: ram_cache={ram_cache}")
+        group_col = self.vars["GROUP"]
+        #dynamic_columns = self.vars["DYNAMIC"]
+
+        grouped = self.features_df.group_by(group_col, maintain_order=True)
+        #self.features_by_id = {
+        #    stay_id[0] if isinstance(stay_id, tuple) else stay_id: df.drop(group_col)
+        #    for stay_id, df in grouped
+        #    }
+        #self.features_by_id = {
+        #    stay_id[0] if isinstance(stay_id, tuple) else stay_id:
+        #        df.select(dynamic_columns).to_numpy()
+        #    for stay_id, df in grouped
+        #    }
+        grouped_outcomes = self.outcome_df.group_by(group_col, maintain_order=True)
+        self.outcomes_by_id = {
+            stay_id[0] if isinstance(stay_id, tuple) else stay_id: df[self.vars["LABEL"]].to_numpy()
+            for stay_id, df in grouped_outcomes
+            }
+
+        static_columns = self.vars["STATIC"]
+        dynamic_columns = self.vars["DYNAMIC"]
+
+        self.dynamic_columns = dynamic_columns
+        self.missingness_columns = [f"MissingIndicator_{col}" for col in dynamic_columns]
+        self.static_columns = static_columns
+        self.sequence_column = self.vars["SEQUENCE"]
+
+        all_columns = (
+            self.dynamic_columns
+            + self.missingness_columns
+            + self.static_columns
+            + [self.sequence_column]
+        )
+
+        self.column_index_map = {col: i for i, col in enumerate(all_columns)}
+
+        self.features_by_id = {
+            int(stay_id[0] if isinstance(stay_id, tuple) else stay_id): df.select(all_columns).to_numpy()
+            for stay_id, df in grouped
+            }
+        #print(f"[DEBUG] features_by_id keys: {len(self.features_by_id)}")
+        #print(f"[DEBUG] outcomes_by_id keys: {len(self.outcomes_by_id)}")
+        self.ram_cache(ram_cache)
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Function to sample from the data split of choice. Used for deep learning implementations.
@@ -498,6 +587,10 @@ class BATPolarsDataset(CommonPolarsDataset):
         Returns:
             A sample from the data, consisting of data, labels, padding mask, and other arrays.
         """
+        #print(f"[DEBUG] __getitem__ called with idx={idx}, pid={os.getpid()}")
+
+        #print(f"[DEBUG] __getitem__ index: {idx}")
+        
         if self._cached_dataset is not None:
             return self._cached_dataset[idx]
 
@@ -507,42 +600,74 @@ class BATPolarsDataset(CommonPolarsDataset):
         #)
         
         # Extracting the stay_id for the specific index
-        stay_id = self.outcome_df[self.vars["GROUP"]].unique()[idx]  
+        #stay_id = self.outcome_df[self.vars["GROUP"]].unique()[idx] 
+        stay_id = self._stay_ids[idx] 
+        #print(f"[DEBUG] stay_id resolved: {stay_id}")
+        #group_col = self.vars["GROUP"]
 
+        #print(f"[DEBUG] Requested stay_id: {stay_id} (type: {type(stay_id)})")
+        #print(f"[DEBUG] Sample key from features_by_id: {next(iter(self.features_by_id))} (type: {type(next(iter(self.features_by_id)))})")
+
+        #if stay_id not in self.features_by_id:
+        #    print(f"[ERROR] stay_id {stay_id} not found in features_by_id keys!")
+        #features = self.features_by_id[stay_id]
+        features = self.features_by_id[stay_id]
+        col_idx = self.column_index_map
+        #print(f"[DEBUG] features fetched")
         # Selecting label column 
-        labels = self.outcome_df.filter(pl.col(self.vars["GROUP"]) == stay_id)[self.vars["LABEL"]].to_numpy()
+
+        #labels = self.outcome_df.filter(pl.col(self.vars["GROUP"]) == stay_id)[self.vars["LABEL"]].to_numpy()
+        labels = self.outcomes_by_id[stay_id]
+        #print(f"[DEBUG] labels fetched")
         
         # Select dynamic values (excluding stay_id and time columns)
-        dynamic_columns = self.vars["DYNAMIC"]  # Use DYNAMIC columns defined in gin
-        data = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(dynamic_columns).to_numpy()
+        #dynamic_columns = self.vars["DYNAMIC"]  # Use DYNAMIC columns defined in gin
+
+        #data = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(dynamic_columns).to_numpy()
         
+        #data = features.select(dynamic_columns).to_numpy()
+        #data = self.features_by_id[stay_id]
+        data = features[:, [col_idx[col] for col in self.dynamic_columns]]
+        #print(f"[DEBUG] dynamic data extracted")
+
+        #dynamic_columns = self.vars["DYNAMIC"] # tmp it is in init find a way, maybe self 
         # Select missingness indicators for dynamic features (matching the same order as the dynamic features)
-        missingness_columns = [f'MissingIndicator_{col}' for col in dynamic_columns]
-        mask = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(missingness_columns).to_numpy()
-        mask = (1 - mask)
+        #missingness_columns = [f'MissingIndicator_{col}' for col in dynamic_columns]
+        #mask = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(missingness_columns).to_numpy()
+        #mask = features.select(missingness_columns).to_numpy()
+        #mask = (1 - mask)
+        mask = 1 - features[:, [col_idx[col] for col in self.missingness_columns]]
+        #print(f"[DEBUG] mask computed")
 
         # Select static features (assuming they are labeled 'age', 'sex', etc. in the dataset)
-        static_columns = self.vars["STATIC"]  # Use STATIC columns defined in gin
-        static = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(static_columns)[0].to_numpy().flatten()
+        #static_columns = self.vars["STATIC"]  # Use STATIC columns defined in gin
+        #static = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(static_columns)[0].to_numpy().flatten()
+        #static = features.select(static_columns)[0].to_numpy().flatten()
+        static = features[0, [col_idx[col] for col in self.static_columns]]
+        #print(f"[DEBUG] static extracted")
 
         # Select timeseries 
-        time_column = self.vars["SEQUENCE"]
-        times_raw = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(time_column).to_numpy().flatten()
+        #time_column = self.vars["SEQUENCE"]
+        #times_raw = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(time_column).to_numpy().flatten()
+        #times_raw = features.select(time_column).to_numpy().flatten()
+        times_raw = features[:, col_idx[self.sequence_column]]
         # tmp solution for times normalization, should be done in preprocessing. See how R did it 
         times_numeric = (times_raw - times_raw[0]).astype('timedelta64[ms]').astype(np.float32)
         # NO NORNALIZATION: Convert milliseconds to minutes
         times = times_numeric / 60000  # 1 minute = 60,000 ms
         # NORMALIZATION: to [-1, 1] based on global max in milliseconds
         #times = (times_numeric / global_max_time_ms) * 2 - 1
+        #print(f"[DEBUG] times computed")
 
         # Array containing delta time values 
         delta = self.get_delta_t(times, data, mask) 
+        #print(f"[DEBUG] delta computed")
 
         # Permute 
         data = data.T
         mask = mask.T
         delta = delta.T
-    
+
         # Return all of the required arrays as tensors
         return (
             torch.from_numpy(data),
@@ -582,43 +707,52 @@ class BATPolarsDataset(CommonPolarsDataset):
 
         return dt_array
 
-   
-    def collate_fn_pad_to_longest_in_batch(self):
-        """
-        Returns a collate function that pads variable-length time series
-        in a batch to the length of the longest sequence.
+    @staticmethod
+    def pad_2d_tensor(tensor, max_len):
+                    pad_amt = max_len - tensor.shape[-1]
+                    return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
+    @staticmethod           
+    def pad_1d_tensor(tensor, max_len):
+        pad_amt = max_len - tensor.shape[0]
+        return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
 
-        Returns:
-            Callable: A function that pads and stacks:
-                - data, mask, delta: (B, F, T)
-                - times: (B, T)
-                - static: (B, S)
-                - label: (B,) or (B, T) depending on task
-                - obs_mask: (B, T) indicating valid timesteps
-        """
+    def collate_fn_pad_to_longest_in_batch(self):
+        return PadToLongestCollator(
+        self.runmode,
+        pad_1d_tensor=BATPolarsDataset.pad_1d_tensor,
+        pad_2d_tensor=BATPolarsDataset.pad_2d_tensor
+    )
+
+
+    """
+    def collate_fn_pad_to_longest_in_batch(self):
+        
+        #Returns a collate function that pads variable-length time series
+        #in a batch to the length of the longest sequence.
+
+        #Returns:
+            #Callable: A function that pads and stacks:
+                #- data, mask, delta: (B, F, T)
+                #- times: (B, T)
+                #- static: (B, S)
+                3- label: (B,) or (B, T) depending on task
+                #- obs_mask: (B, T) indicating valid timesteps
+        
         def collate_fn(batch):
+
             data, mask, labels, times, static, delta = zip(*batch)
             max_len = max(x.shape[-1] for x in data)
             original_lengths = [x.shape[-1] for x in data]
-            
-            def pad_2d_tensor(tensor, max_len):
-                pad_amt = max_len - tensor.shape[-1]
-                return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
-            
-            def pad_1d_tensor(tensor, max_len):
-                pad_amt = max_len - tensor.shape[0]
-                return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
 
-            data   = torch.stack([pad_2d_tensor(x, max_len) for x in data])
-            mask   = torch.stack([pad_2d_tensor(x, max_len) for x in mask])
-            delta  = torch.stack([pad_2d_tensor(x, max_len) for x in delta])
-            times  = torch.stack([pad_1d_tensor(x, max_len) for x in times])
+            data   = torch.stack([self.pad_2d_tensor(x, max_len) for x in data])
+            mask   = torch.stack([self.pad_2d_tensor(x, max_len) for x in mask])
+            delta  = torch.stack([self.pad_2d_tensor(x, max_len) for x in delta])
+            times  = torch.stack([self.pad_1d_tensor(x, max_len) for x in times])
             static = torch.stack(static)
 
-            #print(f"\n \n \n DEBUG RunMode: {self.runmode} \n \n \n")
             # In a regression setting there is one label per time bin 
             if self.runmode == "regression":
-                labels = torch.stack([pad_1d_tensor(x, max_len) for x in labels])
+                labels = torch.stack([self.pad_1d_tensor(x, max_len) for x in labels])
             # In a classification setting there is one label per patient/stay_id 
             else:
                 labels = torch.stack(labels).squeeze()   
@@ -626,11 +760,11 @@ class BATPolarsDataset(CommonPolarsDataset):
             obs_mask = torch.zeros((len(data), max_len), dtype=torch.int32)
             for i, seq_len in enumerate(original_lengths):
                 obs_mask[i, :seq_len] = 1
-            
+
             return data, mask, labels, times, static, delta, obs_mask
 
         return collate_fn
-    
+    """
     def __len__(self) -> int:
         """
         Return the total number of samples in the dataset.
@@ -648,17 +782,17 @@ class BATPolarsDataset(CommonPolarsDataset):
             weights = list((1 / counts) * np.sum(counts) / counts.shape[0])
             return weights
     
-
+"""
 @gin.configurable("SSLPolarsDataset")
 class SSLPolarsDataset(BATPolarsDataset):
     def __init__(self, *args, max_obs=24, forecast_horizon=2, runmode=None, **kwargs):
-        """
-        SSL dataset that slices each batch into observation and forecasting windows.
+        
+        #SSL dataset that slices each batch into observation and forecasting windows.
 
-        Args:
-            max_obs (int): Length of the observation window in time bins (e.g., 24 = 24h).
-            forecast_horizon (int): Length of the forecasting window in time bins (e.g., 2 = 2h).
-        """
+        #Args:
+        #    max_obs (int): Length of the observation window in time bins (e.g., 24 = 24h).
+        #    forecast_horizon (int): Length of the forecasting window in time bins (e.g., 2 = 2h).
+        
         super().__init__(*args, runmode=runmode, **kwargs)
         self.max_obs = max_obs
         self.forecast_horizon = forecast_horizon
@@ -731,6 +865,7 @@ class SSLPolarsDataset(BATPolarsDataset):
                     #    't2_ix': t2_ix
                     #    }
             #        }
+
             return (
                 obs_data,
                 obs_mask_out,
@@ -741,4 +876,71 @@ class SSLPolarsDataset(BATPolarsDataset):
                 static,
                 )
         return collate_fn
+"""
+class SSLBatchCollator:
+    def __init__(self, base_collate, max_obs, forecast_horizon):
+        self.base_collate = base_collate
+        self.max_obs = max_obs
+        self.forecast_horizon = forecast_horizon
+
+    def __call__(self, batch):
+        #print(f"[DEBUG] SSLBatchCollator called in pid={os.getpid()}, batch size={len(batch)}")
+        data, mask, label, times, static, delta, obs_mask = self.base_collate(batch)
+        B, C, T = data.shape
+
+        t1_ix = None
+        tries = 0
+        max_tries = B
+
+        while t1_ix is None and tries < max_tries:
+            idx = torch.randint(0, B, (1,)).item()
+            #print(f"[DEBUG] Try #{tries}: patient={idx}")
+            valid_idx = torch.where(obs_mask[idx].bool())[0]
+            valid_idx = valid_idx[valid_idx >= 12]
+            if len(valid_idx) == 0:
+                tries += 1
+                continue
+
+            max_index = valid_idx[-1]
+            valid_idx = valid_idx[valid_idx <= max_index - self.forecast_horizon]
+            if len(valid_idx) == 0:
+                tries += 1
+                continue
+
+            t1_ix = int(np.random.choice(valid_idx.cpu().numpy()))
+
+        if t1_ix is None:
+            raise ValueError("No valid t1 index found in batch after retrying.")
+
+        t0_ix = max(0, t1_ix - self.max_obs)
+        t2_ix = t1_ix + self.forecast_horizon
+
+        return (
+            data[:, :, t0_ix:t1_ix],
+            mask[:, :, t0_ix:t1_ix],
+            times[:, t0_ix:t1_ix],
+            delta[:, :, t0_ix:t1_ix],
+            data[:, :, t1_ix:t2_ix],
+            mask[:, :, t1_ix:t2_ix],
+            static,
+        )
+
+@gin.configurable("SSLPolarsDataset")
+class SSLPolarsDataset(BATPolarsDataset):
+    def __init__(self, *args, max_obs=24, forecast_horizon=2, runmode=None, **kwargs):
+        
+        #SSL dataset that slices each batch into observation and forecasting windows.
+
+        #Args:
+        #    max_obs (int): Length of the observation window in time bins (e.g., 24 = 24h).
+        #    forecast_horizon (int): Length of the forecasting window in time bins (e.g., 2 = 2h).
+        
+        super().__init__(*args, runmode=runmode, **kwargs)
+        self.max_obs = max_obs
+        self.forecast_horizon = forecast_horizon
+
+    def collate_fn_ssl_windows(self):
+        base_collate = super().collate_fn_pad_to_longest_in_batch()
+        return SSLBatchCollator(base_collate, self.max_obs, self.forecast_horizon)
+
 
