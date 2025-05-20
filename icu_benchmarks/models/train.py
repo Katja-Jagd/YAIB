@@ -16,6 +16,7 @@ from icu_benchmarks.models.utils import save_config_file, JSONMetricsLogger, get
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.constants import DataSplit as Split
 
+import random #[DEBUG]
 cpu_core_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
 
 
@@ -97,10 +98,21 @@ def train_common(
     logging.info(f"Using dataset class: {dataset_class.__name__}.")
     logging.info(f"Logging to directory: {log_dir}.")
     save_config_file(log_dir)  # We save the operative config before and also after training
+    
+    # tmp [DEBUG]
+    ram_cache=True #FORCE FALSE NOMATTER GIN
+    verbose = True # FORCE TRYE NOMATTER GIN 
+    #num_workers = 1 # FORCE TRYE NOMATTER GIN 
+    #persistent_workers=True # FORCE TRYE NOMATTER GIN
+    #print(f"persistent_workers: {persistent_workers}") 
+
     train_dataset = dataset_class(data, split=Split.train, ram_cache=ram_cache, name=dataset_names["train"])
     val_dataset = dataset_class(data, split=Split.val, ram_cache=ram_cache, name=dataset_names["val"])
     train_dataset, val_dataset = assure_minimum_length(train_dataset), assure_minimum_length(val_dataset)
     batch_size = min(batch_size, len(train_dataset), len(val_dataset))
+    
+    print(f"[DEBUG] Train dataset has {len(train_dataset)} samples")
+    print(f"[DEBUG] Val dataset has {len(val_dataset)} samples")
 
     if not eval_only:
         logging.info(
@@ -109,8 +121,20 @@ def train_common(
         )
 
     collate_fn = get_collate_fn(train_dataset)
+    
+    # [DEBUG]
+    #import pickle
+    #try:
+    #    pickle.dumps(collate_fn)
+    #    print("[DEBUG] collate_fn is picklable")
+    #except Exception as e:
+    #    print("[ERROR] collate_fn not picklable:", e)
 
-    print(f'[DEBUG] collate_fn: {collate_fn}')
+    #try:
+    #    pickle.dumps(train_dataset)
+    #    print("[DEBUG] dataset is picklable")
+    #except Exception as e:
+    #    print("[ERROR] dataset not picklable:", e)
 
     logging.info(f"Using {num_workers} workers for data loading.")
     train_loader = DataLoader(
@@ -121,7 +145,6 @@ def train_common(
         drop_last=True,
         persistent_workers=persistent_workers,
         collate_fn=collate_fn,
-
     )
     val_loader = DataLoader(
         val_dataset,
@@ -142,7 +165,10 @@ def train_common(
 
     model.set_weight(weight, train_dataset)
     model.set_trained_columns(train_dataset.get_feature_names())
-    loggers = [TensorBoardLogger(log_dir), JSONMetricsLogger(log_dir)]
+    loggers = [
+        TensorBoardLogger(log_dir), 
+        JSONMetricsLogger(log_dir)
+        ]
     if use_wandb:
         loggers.append(WandbLogger(save_dir=log_dir))
     callbacks = [
@@ -150,6 +176,8 @@ def train_common(
         ModelCheckpoint(log_dir, filename="model", save_top_k=1, save_last=True),
         LearningRateMonitor(logging_interval="step"),
     ]
+    #loggers = [] # tmp [DEBUG]
+
     if verbose:
         callbacks.append(TQDMProgressBar(refresh_rate=min(100, len(train_loader) // 2)))
     if precision == 16 or "16-mixed":
