@@ -19,7 +19,9 @@ from icu_benchmarks.constants import RunMode
 import random 
 
 import time # [DEBUG]
-import os #[ DEBUG]
+import os #[DEBUG]
+from tqdm import tqdm #[DEBUG]
+
 @gin.configurable("CommonPolarsDataset")
 class CommonPolarsDataset(Dataset):
     def __init__(
@@ -61,11 +63,14 @@ class CommonPolarsDataset(Dataset):
         self.name = name
 
     def ram_cache(self, cache: bool = True):
-        print(f"[DEBUG] ram_cache() called with cache={cache}")
+        #print(f"[DEBUG] ram_cache() called with cache={cache}")
         self._cached_dataset = None
         if cache:
             logging.info(f"Caching {self.split} dataset in ram.")
-            self._cached_dataset = [self[i] for i in range(len(self))]
+            #self._cached_dataset = [self[i] for i in range(len(self))]
+            self._cached_dataset = [
+                self[i] for i in tqdm(range(len(self)), desc=f"Caching {self.split}")
+                ]
 
     def __len__(self) -> int:
         """Returns number of stays in the data.
