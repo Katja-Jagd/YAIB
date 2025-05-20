@@ -24,6 +24,8 @@ from pytorch_lightning import LightningModule
 from icu_benchmarks.models.constants import MLMetrics, DLMetrics
 from icu_benchmarks.constants import RunMode
 
+import time # [DEBUG]
+
 gin.config.external_configurable(nn.functional.nll_loss, module="torch.nn.functional")
 gin.config.external_configurable(nn.functional.cross_entropy, module="torch.nn.functional")
 gin.config.external_configurable(nn.functional.mse_loss, module="torch.nn.functional")
@@ -722,12 +724,25 @@ class SSLWrapper(DLWrapper):
         self.log_grad_norm = log_grad_norm
         self.output_transform = lambda out: out
         self.loss_weights = None
+        self._prev_batch_end_time = None # [DEBUG]
 
     def set_metrics(self, *args):
         return DLMetrics.REGRESSION
 
     def step_fn(self, batch, step_prefix=""):
+
+        # ⏱ Measure gap since last batch
+        #now = time.time()
+        #if self._prev_batch_end_time is not None:
+        #    gap = now - self._prev_batch_end_time
+        #    if self.global_step % 10 == 0:
+        #        print(f"[TIMING] Time since last batch: {gap:.3f} seconds")
+        #batch_start_time = now
+
+        # Unpack
         obs_data, obs_mask, obs_times, obs_delta, forecast_target, forecast_mask, static = batch
+
+        # Transfer to device
         obs_data = obs_data.to(self.device).float()
         obs_mask = obs_mask.to(self.device).float()
         obs_times = obs_times.to(self.device).float()
@@ -735,7 +750,6 @@ class SSLWrapper(DLWrapper):
         static = static.to(self.device).float()
         forecast_target = forecast_target.to(self.device).float()
         forecast_mask = forecast_mask.to(self.device).float()
-
         # Needs to be float16 to perform flash attention
         #obs_data = obs_data.to(dtype=torch.float16, device=self.device)
         #obs_mask = obs_mask.to(dtype=torch.float16, device=self.device)
@@ -745,17 +759,31 @@ class SSLWrapper(DLWrapper):
         #forecast_target = forecast_target.to(dtype=torch.float16, device=self.device)
         #forecast_mask = forecast_mask.to(dtype=torch.float16, device=self.device)
 
+        # Forward pass
         prediction = self(obs_data, static, obs_times, obs_mask)
+
+        # Compute masked loss
         masked_pred = torch.masked_select(prediction, forecast_mask.bool())
         masked_target = torch.masked_select(forecast_target, forecast_mask.bool())
-
         loss = self.loss(masked_pred, masked_target)
-
+        
+        # Update metrics
         transformed_output = self.output_transform((masked_pred, masked_target))
         for key, metric in self.metrics[step_prefix].items():
             metric.update(transformed_output)
 
+    
+        # Log loss
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+
+        # ⏱ Total batch time
+        #total_batch_time = time.time() - batch_start_time
+        #if self.global_step % 10 == 0:
+        #    print(f"[TIMING] Step {self.global_step} took {total_batch_time:.3f} seconds")
+
+        # Save timestamp for next batch
+        #self._prev_batch_end_time = time.time()
+
         return loss
 
     # After loss.backward() but before optimizer.step() 
@@ -783,5 +811,9 @@ class SSLWrapper(DLWrapper):
             self.log("grad_norm/pre_clip", total_norm_before, on_step=True, on_epoch=False)
             self.log("grad_norm/post_clip", total_norm_after, on_step=True, on_epoch=False)
             self.log("grad_norm/clipping_ratio", total_norm_after / (total_norm_before + 1e-8), on_step=True, on_epoch=False)
+    def on_train_epoch_start(self):
+            self.epoch_start_time = time.time()
 
-    
+    def on_train_epoch_end(self):
+        epoch_time = time.time() - self.epoch_start_time
+        print(f"[INFO] Epoch {self.current_epoch} took {epoch_time:.2f} seconds")
