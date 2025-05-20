@@ -4,9 +4,9 @@ PredictionPandasDataset.ram_cache = True
 PredictionPolarsDataset.vars = %vars
 PredictionPolarsDataset.ram_cache = True
 BATPolarsDataset.vars = %vars 
-BATPolarsDataset.ram_cache = True 
+BATPolarsDataset.ram_cache = None 
 SSLPolarsDataset.vars = %vars 
-SSLPolarsDataset.ram_cache = True 
+SSLPolarsDataset.ram_cache = None 
 # Imputation
 ImputationPandasDataset.vars = %vars
 ImputationPandasDataset.ram_cache = True
