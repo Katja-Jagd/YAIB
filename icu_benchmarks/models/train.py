@@ -100,7 +100,7 @@ def train_common(
     save_config_file(log_dir)  # We save the operative config before and also after training
     
     # tmp [DEBUG]
-    ram_cache=True #FORCE FALSE NOMATTER GIN
+    ram_cache=False #FORCE FALSE NOMATTER GIN
     verbose = True # FORCE TRYE NOMATTER GIN 
     #num_workers = 1 # FORCE TRYE NOMATTER GIN 
     #persistent_workers=True # FORCE TRYE NOMATTER GIN
