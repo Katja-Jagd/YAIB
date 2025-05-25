@@ -25,9 +25,9 @@ optimizer/hyperparameter.lr = 5e-4
 # Encoder params
 
 model/hyperparameter.class_to_tune = @SSL_BAT
-model/hyperparameter.value_embed_size = 64 # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
+model/hyperparameter.value_embed_size = 128 # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
 model/hyperparameter.layers = 2
-model/hyperparameter.heads = 1
+model/hyperparameter.heads = 2
 model/hyperparameter.dropout = 0
 model/hyperparameter.attn_dropout = 0
 model/hyperparameter.use_mask = False
@@ -39,9 +39,9 @@ model/hyperparameter.prediction_head_kwargs = {
 }
 
 # Train params
-train_common.epochs = 50
+train_common.epochs = 100
 train_common.batch_size = 128
-train_common.patience = 10
+train_common.patience = 20
 train_common.min_delta = 1e-4
 
 train_common.dataset_class = @SSLPolarsDataset
@@ -51,3 +51,7 @@ tune_hyperparameters.scopes = ["model", "optimizer"]  # defines the scopes that 
 tune_hyperparameters.n_initial_points = 5  # defines random points to initilaize gaussian process
 tune_hyperparameters.n_calls = 10  # number of iterations to find best set of hyperparameters
 tune_hyperparameters.folds_to_tune_on = 2  # number of folds to use to evaluate set of hyperparameters
+
+# CV params 
+execute_repeated_cv.cv_repetitions = 1
+execute_repeated_cv.cv_folds = 1
