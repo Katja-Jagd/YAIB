@@ -118,6 +118,7 @@ class PositionalEncodingTF(nn.Module):
         self._num_timescales = d_model // 2
 
     def getPE(self, P_time):
+        #print("P_time shape:", P_time.shape) # [DEBUG]
         B = P_time.shape[1]
 
         P_time = P_time.float()
@@ -139,6 +140,8 @@ class PositionalEncodingTF(nn.Module):
         return pe
 
     def forward(self, P_time):
+        #print("[DEBUG] PositionalEncodingTF input shape:", P_time.shape)
+        #print("[DEBUG] Min/max time:", P_time.min().item(), P_time.max().item())
         pe = self.getPE(P_time)
         # pe = pe.cuda()
         return pe
