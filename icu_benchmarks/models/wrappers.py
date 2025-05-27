@@ -817,3 +817,8 @@ class SSLWrapper(DLWrapper):
     def on_train_epoch_end(self):
         epoch_time = time.time() - self.epoch_start_time
         print(f"[INFO] Epoch {self.current_epoch} took {epoch_time:.2f} seconds")
+
+        if self.current_epoch % 10 == 0:
+            save_path = Path(self.logger.save_dir) / f"manual-model-epoch-{self.current_epoch}.ckpt"
+            self.trainer.save_checkpoint(str(save_path))
+            print(f"[INFO] Saved model manually at {save_path}")
