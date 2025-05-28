@@ -54,4 +54,4 @@ tune_hyperparameters.folds_to_tune_on = 2  # number of folds to use to evaluate 
 
 # CV params 
 execute_repeated_cv.cv_repetitions = 1
-execute_repeated_cv.cv_folds = 1
+execute_repeated_cv.cv_folds = 5
