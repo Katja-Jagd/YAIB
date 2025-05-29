@@ -34,4 +34,4 @@ module load python3/3.10.16
 source yaib_venv/bin/activate
 
 # Execute command
-icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/mortality24/mimic   -n mimic     -t BinaryClassification     -tn Mortality24     -m BAT     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
+icu-benchmarks train     -d /work3/s185395/YAIB-cohorts/data/mortality24/mimic   -n mimic     -t BinaryClassification     -tn Mortality24     -m BAT     -gc     -lc -s 2222     -l ../yaib_logs/ --tune --wandb-sweep
