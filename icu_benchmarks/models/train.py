@@ -260,7 +260,7 @@ def persist_shap_data(trainer: Trainer, log_dir: Path):
         logging.error(f"Failed to save shap values: {e}")
 
 
-def load_model(model, source_dir, pl_model=True):
+def load_model(model, source_dir, pl_model=True, cpu=False): # [DEBUG] ADDED EXTRA INPUT VARIABLE OS I CAN TEST FROM CLI
     if source_dir.exists():
         if model.requires_backprop:
             if (source_dir / "model.ckpt").exists():
