@@ -9,6 +9,7 @@ SSLWrapper.clip_grad = True
 SSLWrapper.max_grad_norm = 0.5
 SSLWrapper.log_grad_norm = True
 SSLWrapper.loss = @mse_loss
+SSLWrapper.lr_scheduler = "exponential"
 
 # Train params
 train_common.model = @SSL_BAT
@@ -39,10 +40,10 @@ model/hyperparameter.prediction_head_kwargs = {
 }
 
 # Train params
-train_common.epochs = 100
+train_common.epochs = 200
 train_common.batch_size = 128
-train_common.patience = 20
-train_common.min_delta = 1e-4
+train_common.patience = 15
+train_common.min_delta = 5e-3
 
 train_common.dataset_class = @SSLPolarsDataset
 
