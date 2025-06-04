@@ -121,6 +121,23 @@ def main(my_args=tuple(sys.argv[1:])):
         source_dir = args.source_dir
         logging.info(f"Will load weights from {source_dir} and bind train gin-config. Note: this might override your config.")
         gin.parse_config_file(source_dir / "train_config.gin")
+        # Added cause models were trained on cv-5 but i do not want to evaluate like that so i fold have data leakage
+        # Only do this in eval mode and if loading weights
+        import re 
+        match = re.search(r"repetition_(\d+)/fold_(\d+)", str(args.source_dir))
+        if match:
+            eval_repetition_index = int(match.group(1))
+            eval_fold_index = int(match.group(2))
+            print(f"📌 Parsed repetition={eval_repetition_index}, fold={eval_fold_index} from source_dir")
+            gin.bind_parameter("execute_repeated_cv.cv_repetitions", 1)
+            gin.bind_parameter("execute_repeated_cv.cv_folds", 1)
+            gin.bind_parameter("execute_repeated_cv.cv_repetitions_to_train", 1)
+            gin.bind_parameter("execute_repeated_cv.cv_folds_to_train", 1)
+            gin.bind_parameter("preprocess.repetition_index", eval_repetition_index)
+            gin.bind_parameter("preprocess.fold_index", eval_fold_index)
+        else:
+            raise ValueError(f"❌ Could not parse repetition/fold from path: {args.source_dir}")
+
     elif args.samples and args.source_dir is not None:  # Train model with limited samples and bind existing config
         logging.info("Binding train gin-config. Note: this might override your config.")
         gin.parse_config_file(args.source_dir / "train_config.gin")
