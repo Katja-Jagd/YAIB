@@ -647,8 +647,9 @@ class CustomDLPredictionWrapper(DLWrapper):
     """
     _supported_run_modes = [RunMode.classification, RunMode.regression]
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, input_size=None ,**kwargs):
+        self.save_hyperparameters() 
+        super().__init__(input_size=input_size, **kwargs)
         self.output_transform = None
         self.loss_weights = None
 
@@ -716,9 +717,11 @@ class SSLWrapper(DLWrapper):
         clip_grad: bool = False,
         max_grad_norm: float = 1.0,
         log_grad_norm: bool = False,
+        input_size=None,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        self.save_hyperparameters()
+        super().__init__(input_size=input_size, **kwargs)
         self.clip_grad = clip_grad
         self.max_grad_norm = max_grad_norm
         self.log_grad_norm = log_grad_norm
