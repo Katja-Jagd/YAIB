@@ -40,18 +40,36 @@ class EncoderPrediction(nn.Module):
         self.encoder_class = encoder_class
         self.prediction_head = prediction_head
         self.prediction_head_kwargs = prediction_head_kwargs or {}
-        self.head = None  # Instantiated lazily
+
+        # Handeling input dim for head depending on the output dimension of the encoding model 
+        if isinstance(self.encoder_class, EncoderClassifierCrossParallel):
+            if self.encoder_class.use_static:
+                self.input_dim = (
+                    2 * (self.encoder_class.sensor_encoding_out + self.encoder_class.embed_out)
+                    + self.encoder_class.static_out
+                )
+            else:
+                self.input_dim = (
+                    2 * (self.encoder_class.sensor_encoding_out + self.encoder_class.embed_out)
+                )
+        else:
+            raise ValueError("Unknown encoder class: cannot determine input dimension.")
+    
+        # Prediction head initialization 
+        self.head = self.prediction_head(
+            input_dim=self.input_dim,
+            **self.prediction_head_kwargs
+        )
 
     def forward(self, x, static, time, sensor_mask):
         features = self.encoder_class(x, static, time, sensor_mask)
-
-        # Lazily instantiate the head based on input dim 
-        if self.head is None:
-            self.head = self.prediction_head(
-                input_dim=features.shape[1], 
-                **self.prediction_head_kwargs
-                ).to(features.device)
-
+        
+        # Sanity check shape
+        if features.shape[1] != self.input_dim:
+            raise ValueError(
+                f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
+            )
+        
         return self.head(features)
 
 
@@ -483,6 +501,9 @@ class BAT(CustomDLPredictionWrapper):
         **kwargs
     ):
         super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+
+        self.save_hyperparameters()
+        
         # Extract dimensions from dataset
         sensors_count = input_size[1]
         max_timepoint_count = input_size[2]
@@ -538,6 +559,7 @@ class SSL_BAT(SSLWrapper):
         *args,
         **kwargs
     ):
+        self.save_hyperparameters()
         super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
         # Extract dimensions from dataset
         sensors_count = input_size[1]
