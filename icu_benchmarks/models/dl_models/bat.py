@@ -559,8 +559,8 @@ class SSL_BAT(SSLWrapper):
         *args,
         **kwargs
     ):
-        self.save_hyperparameters()
         super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+        self.save_hyperparameters()
         # Extract dimensions from dataset
         sensors_count = input_size[1]
         max_timepoint_count = input_size[2]
