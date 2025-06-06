@@ -41,6 +41,7 @@ def preprocess_data(
     label: str = None,
     required_var_types=["GROUP", "SEQUENCE", "LABEL"],
     required_segments=[Segment.static, Segment.dynamic, Segment.outcome],
+    add_age_binary = None,
 ) -> dict[dict[pl.DataFrame]] or dict[dict[pd.DataFrame]]:
     """Perform loading, splitting, imputing and normalising of task data.
 
