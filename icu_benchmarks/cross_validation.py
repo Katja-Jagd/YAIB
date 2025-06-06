@@ -37,6 +37,9 @@ def execute_repeated_cv(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
+    enable_subset_train: bool = False, # ADDED FOR SUBSET 
+    subset_train_size: int = 1000, # ADDED FOR SUBSET 
+    subset_train_seed: int = 42, # ADDED FOR SUBSET 
 ) -> float:
     """Preprocesses data and trains a model for each fold.
 
@@ -104,30 +107,87 @@ def execute_repeated_cv(
                 complete_train=complete_train,
             )
 
-            ### DEBUG ###
-            #import os
-            #import polars as pl
-            # Path to save the data
-            #folder_path = "/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test"
-            # Create the folder if it does not exist
-            #os.makedirs(folder_path, exist_ok=True)
-            # Iterate over the dictionary and save each DataFrame as a Parquet file
-            # Iterate over the outer dictionary (train, val, test)
-            #for split, split_data in data.items():
-                # Iterate over the inner dictionary (OUTCOME, FEATURES)
-            #    for key, df in split_data.items():
-                    # Define the file path for each DataFrame
-            #        file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
-                    
-                    # Save the DataFrame to a Parquet file
-            #        df.write_parquet(file_path)
-                    
-                    # Optionally, print the path to verify where the file is saved
-            #        print(f"Saved {key} DataFrame as: {file_path}")
-            
-            #print(f'\n\n\n\n\n PREPROCESSED DATA SAVED \n\n\n\n\n')
+            # Added function to save subsets used for fine-tuning experiment
+            import polars as pl
+            import os
 
-            ### DEBUG ###
+            def downsample_preserving_balance(
+                df: pl.DataFrame,
+                label_col: str,
+                total_samples: int,
+                seed: int = None
+            ) -> pl.DataFrame:
+                """
+                Downsample a Polars DataFrame to total_samples while preserving class distribution.
+                """
+                # Step 1: Manually count classes
+                labels = df[label_col].unique().to_list()
+                label_counts = {}
+                total_original = 0
+
+                for label in labels:
+                    count = len(df.filter(pl.col(label_col) == label))
+                    label_counts[label] = count
+                    total_original += count
+
+                # Step 2: Compute target number of samples per class
+                label_to_n_samples = {
+                    label: int(round((count / total_original) * total_samples))
+                    for label, count in label_counts.items()
+                }
+
+                # Step 3: Sample per class
+                samples = []
+                for label, n_label in label_to_n_samples.items():
+                    df_label = df.filter(pl.col(label_col) == label)
+                    if len(df_label) < n_label:
+                        raise ValueError(f"Not enough data for label {label}: requested {n_label}, found {len(df_label)}")
+                    sampled = df_label.sample(n=n_label, with_replacement=False, seed=seed)
+                    samples.append(sampled)
+
+                # Step 4: Combine and shuffle
+                combined = pl.concat(samples)
+                return combined.sample(n=len(combined), with_replacement=False, seed=seed)
+
+            # ======================= #
+            # Perform downsampling if enabled
+            # ======================= #
+            if enable_subset_train:
+                print(f"🔍 Subsetting training data to {subset_train_size} samples (seed={subset_train_seed})...")
+
+                original_train_outcome = data["train"]["OUTCOME"]
+                original_train_features = data["train"]["FEATURES"]
+
+                downsampled_outcome = downsample_preserving_balance(
+                    df=original_train_outcome,
+                    label_col="label",
+                    total_samples=subset_train_size,
+                    seed=subset_train_seed
+                )
+
+                selected_ids = downsampled_outcome.select("stay_id").to_series().to_list()
+                downsampled_features = original_train_features.filter(pl.col("stay_id").is_in(selected_ids))
+
+                data["train"]["OUTCOME"] = downsampled_outcome
+                data["train"]["FEATURES"] = downsampled_features
+
+                # Define path to save the preprocessed (and downsampled) data
+                folder_path = f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/{str(subset_train_size)}_{str(subset_train_seed)}"
+                os.makedirs(folder_path, exist_ok=True)
+
+                # Save all splits to disk
+                for split, split_data in data.items():
+                    for key, df in split_data.items():
+                        file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
+                        try:
+                            df.write_parquet(file_path)
+                            print(f"Saved {split}_{key} DataFrame as: {file_path}")
+                        except Exception as e:
+                            print(f"Failed to save {split}_{key} to {file_path}: {e}")
+
+                print(f"\n✅ PREPROCESSED DATA (including downsampled train) SAVED to: {folder_path}\n")
+            # ======================= #
+
     
             preprocess_time = datetime.now() - start_time
             start_time = datetime.now()
