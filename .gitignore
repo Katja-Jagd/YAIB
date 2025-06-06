@@ -140,3 +140,5 @@ icu_benchmarks/data/preprocessed_data_test/
 # HPC output and error logs 
 hpc_output/
 
+# data subsets saved  
+preprocessed_data/
