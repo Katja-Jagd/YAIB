@@ -207,6 +207,13 @@ def execute_repeated_cv(
             )
             train_time = datetime.now() - start_time
 
+            # [DEBUG]
+            # ✅ Stop after repetition 0 and fold 0
+            if repetition == 0 and fold_index == 0:
+                logging.info("Stopping after repetition 0, fold 0.")
+                return agg_loss
+            # [DEBUG]
+            
             log_full_line(
                 f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
                 level=logging.INFO,
