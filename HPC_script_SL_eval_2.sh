@@ -36,9 +36,9 @@ source yaib_venv/bin/activate
 # ------------------------
 # CONFIGURABLE PARAMETERS
 # ------------------------
-SOURCE_NAME="eicu"                        # Training source dataset
-EVAL_DATASETS=("mimic" "miiv")             # Evaluation datasets
-EXPERIMENT_FOLDER="2025-06-04T20-49-02"   # Folder name in logs
+SOURCE_NAME="miiv"                        # Training source dataset
+EVAL_DATASETS=("mimic" "eicu")             # Evaluation datasets
+EXPERIMENT_FOLDER="2025-06-06T13-17-03"   # Folder name in logs
 
 # ------------------------
 # EVALUATE ALL FOLDS
