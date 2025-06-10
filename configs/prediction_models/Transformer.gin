@@ -6,6 +6,9 @@ include "configs/prediction_models/common/DLCommon.gin"
 # Optimizer params
 train_common.model = @Transformer
 
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
+
 optimizer/hyperparameter.class_to_tune = @Adam
 optimizer/hyperparameter.weight_decay = 1e-6
 optimizer/hyperparameter.lr = (1e-6, 1e-4)
@@ -20,5 +23,10 @@ model/hyperparameter.heads = (1, 8, "log")
 model/hyperparameter.depth = (1, 3)
 model/hyperparameter.dropout = 0 # no improvement (0.0, 0.4)
 model/hyperparameter.dropout_att = (0.0, 1.0)
+
+# Enable subsetting of training data
+execute_repeated_cv.enable_subset_train = True
+execute_repeated_cv.subset_train_size = 9000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9000, 9506 
+execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 
 
 

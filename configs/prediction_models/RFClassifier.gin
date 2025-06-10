@@ -6,6 +6,9 @@ include "configs/prediction_models/common/MLCommon.gin"
 # Train params
 train_common.model = @RFClassifier
 
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
+
 model/hyperparameter.class_to_tune = @RFClassifier
 model/hyperparameter.n_estimators = (10, 50, 100, 200, 500)
 model/hyperparameter.max_depth = (5, 10, 20)
@@ -16,3 +19,7 @@ model/hyperparameter.bootstrap = [True, False]
 model/hyperparameter.class_weight = [None, 'balanced']
 
 
+# Enable subsetting of training data
+execute_repeated_cv.enable_subset_train = True
+execute_repeated_cv.subset_train_size = 9000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9506 
+execute_repeated_cv.subset_train_seed = 84 # [42, 84, 126, 168, 210] 
