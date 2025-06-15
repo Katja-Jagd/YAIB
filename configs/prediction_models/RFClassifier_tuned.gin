@@ -1,0 +1,19 @@
+# Settings for Random Forest Classifier.
+
+# Common settings for ML models
+include "configs/prediction_models/common/MLCommon.gin"
+
+# Train params
+train_common.model = @RFClassifier
+
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
+
+model/hyperparameter.class_to_tune = @RFClassifier
+model/hyperparameter.n_estimators = 50
+model/hyperparameter.max_depth = 10
+model/hyperparameter.min_samples_split = 5
+model/hyperparameter.min_samples_leaf = 2
+model/hyperparameter.max_features = 'sqrt'
+model/hyperparameter.bootstrap = True
+model/hyperparameter.class_weight = 'balanced'

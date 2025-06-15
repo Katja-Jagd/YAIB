@@ -87,6 +87,13 @@ def execute_repeated_cv(
     for repetition in range(cv_repetitions_to_train):
         # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
         for fold_index in range(cv_folds_to_train):
+
+            # [DEBUG]
+            # testing trainign with specific repetition and fold 
+            if not (repetition == 3 and fold_index == 0):
+                logging.info(f"Skipping repetition {repetition}, fold {fold_index}")
+                continue
+             # [DEBUG]
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,23 +154,33 @@ def execute_repeated_cv(
 
                 # Step 4: Combine and shuffle
                 combined = pl.concat(samples)
+
+                # Step 5: Preserve original ordering of stay_ids
+                selected_ids = combined.select("stay_id").to_series().to_list()
+                original_order = (
+                    df.filter(pl.col("stay_id").is_in(selected_ids))
+                    .select("stay_id")
+                )
+                combined = original_order.join(combined, on="stay_id", how="left")
+
                 return combined.sample(n=len(combined), with_replacement=False, seed=seed)
 
             # ======================= #
             # Perform downsampling if enabled
             # ======================= #
             if enable_subset_train:
+                print(f"\n\n\n")
                 print(f"🔍 Subsetting training data to {subset_train_size} samples (seed={subset_train_seed})...")
-
+                print(f"\n\n\n")
                 original_train_outcome = data["train"]["OUTCOME"]
                 original_train_features = data["train"]["FEATURES"]
-
+                
                 downsampled_outcome = downsample_preserving_balance(
                     df=original_train_outcome,
                     label_col="label",
                     total_samples=subset_train_size,
                     seed=subset_train_seed
-                )
+                )      
 
                 selected_ids = downsampled_outcome.select("stay_id").to_series().to_list()
                 downsampled_features = original_train_features.filter(pl.col("stay_id").is_in(selected_ids))
@@ -209,9 +226,9 @@ def execute_repeated_cv(
 
             # [DEBUG]
             # ✅ Stop after repetition 0 and fold 0
-            if repetition == 0 and fold_index == 0:
-                logging.info("Stopping after repetition 0, fold 0.")
-                return agg_loss
+            #if repetition == 0 and fold_index == 0:
+            #    logging.info("Stopping after repetition 0, fold 0.")
+            #    return agg_loss
             # [DEBUG]
             
             log_full_line(

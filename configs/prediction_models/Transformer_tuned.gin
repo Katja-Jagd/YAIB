@@ -1,0 +1,34 @@
+# Settings for Transformer model.
+
+# Common settings for DL models
+include "configs/prediction_models/common/DLCommon.gin"
+
+# Optimizer params
+train_common.model = @Transformer
+
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
+
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = 9.1408e-5
+
+# Encoder params
+model/hyperparameter.class_to_tune = @Transformer
+model/hyperparameter.ff_hidden_mult = 1
+model/hyperparameter.l1_reg = 0.96325
+model/hyperparameter.num_classes = %NUM_CLASSES
+model/hyperparameter.hidden = 290
+model/hyperparameter.heads = 1
+model/hyperparameter.depth = 18
+model/hyperparameter.dropout = 0.03312
+model/hyperparameter.dropout_att = 0.50651
+
+train_common.epochs = 200
+train_common.batch_size = 256
+train_common.patience = 10
+train_common.min_delta = 1e-4
+
+execute_repeated_cv.enable_subset_train = True
+execute_repeated_cv.subset_train_size = 9506 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9506 
+execute_repeated_cv.subset_train_seed = 84 # [42, 84, 126, 168, 210] 

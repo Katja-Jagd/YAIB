@@ -6,14 +6,24 @@ include "configs/prediction_models/common/DLCommon.gin"
 # Train params
 train_common.model = @GRUNet
 
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
+
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
 optimizer/hyperparameter.weight_decay = 1e-6
-optimizer/hyperparameter.lr = (1e-6, 1e-4, "log")
+optimizer/hyperparameter.lr = (1e-6, 1e-4)
 
 # Encoder params
 model/hyperparameter.class_to_tune = @GRUNet
 model/hyperparameter.num_classes = %NUM_CLASSES
 model/hyperparameter.hidden_dim = (32, 512, "log")
-model/hyperparameter.layer_dim = (1, 10)
+model/hyperparameter.layer_dim = (1, 20)
 
+train_common.epochs = 100
+train_common.batch_size = 256
+train_common.patience = 5
+train_common.min_delta = 1e-4
+
+tune_hyperparameters.n_calls = 10  # numbe rof iterations to find best set of hyperparameters
+tune_hyperparameters.folds_to_tune_on = 3  # number of folds to use to evaluate set of hyperparameters
