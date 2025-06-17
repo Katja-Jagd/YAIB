@@ -90,10 +90,10 @@ def execute_repeated_cv(
 
             # [DEBUG]
             # testing trainign with specific repetition and fold 
-            if not (repetition == 3 and fold_index == 0):
-                logging.info(f"Skipping repetition {repetition}, fold {fold_index}")
-                continue
-             # [DEBUG]
+            #if not (repetition == 0 and fold_index == 0):
+            #    logging.info(f"Skipping repetition {repetition}, fold {fold_index}")
+            #    continue
+            # [DEBUG]
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -226,9 +226,9 @@ def execute_repeated_cv(
 
             # [DEBUG]
             # ✅ Stop after repetition 0 and fold 0
-            #if repetition == 0 and fold_index == 0:
-            #    logging.info("Stopping after repetition 0, fold 0.")
-            #    return agg_loss
+            if repetition == 0 and fold_index == 0:
+                logging.info("Stopping after repetition 0, fold 0.")
+                return agg_loss
             # [DEBUG]
             
             log_full_line(

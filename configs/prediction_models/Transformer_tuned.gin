@@ -30,5 +30,5 @@ train_common.patience = 10
 train_common.min_delta = 1e-4
 
 execute_repeated_cv.enable_subset_train = True
-execute_repeated_cv.subset_train_size = 9506 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9506 
-execute_repeated_cv.subset_train_seed = 84 # [42, 84, 126, 168, 210] 
+execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9000, 9506 
+execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 

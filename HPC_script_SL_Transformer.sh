@@ -2,7 +2,7 @@
 #!/bin/sh 
 ### General options  
 ### -- specify queue -- 
-#BSUB -q gpua100
+#BSUB -q gpuv100
 ### -- set the job Name -- 
 #BSUB -J YAIB
 ### -- ask for number of cores (default: 1) -- 
@@ -15,7 +15,7 @@
 ### -- specify that we want the job to get killed if it exceeds 5 GB per core/slot -- 
 #BSUB -M 4GB
 ### -- set walltime limit: hh:mm -- 
-#BSUB -W 48:00 
+#BSUB -W 05:00 
 ### -- set the email address -- 
 # please uncomment the following line and put in your e-mail address,
 # if you want to receive e-mail notifications on a non-default address
