@@ -12,6 +12,7 @@ from icu_benchmarks.models.utils import JsonResultLoggingEncoder
 from icu_benchmarks.run_utils import log_full_line
 from icu_benchmarks.constants import RunMode
 
+import os # Added to extract dataset name 
 
 @gin.configurable
 def execute_repeated_cv(
@@ -88,12 +89,13 @@ def execute_repeated_cv(
         # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
         for fold_index in range(cv_folds_to_train):
 
-            # [DEBUG]
-            # testing trainign with specific repetition and fold 
-            #if not (repetition == 0 and fold_index == 0):
-            #    logging.info(f"Skipping repetition {repetition}, fold {fold_index}")
+            # ------------  SPECIFY ONE FOLD AND REP TO USE FOR SUBSET TRAINING ---------------- # # the one with the lowest loss during pre-training
+            #rep_subset = 0
+            #fold_subset = 0
+            #if (repetition, fold_index) != (rep_subset, fold_subset):
             #    continue
-            # [DEBUG]
+            # ------------------------------------------------------------ #  
+
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -189,7 +191,8 @@ def execute_repeated_cv(
                 data["train"]["FEATURES"] = downsampled_features
 
                 # Define path to save the preprocessed (and downsampled) data
-                folder_path = f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/{str(subset_train_size)}_{str(subset_train_seed)}"
+                dataset_name = os.path.basename(data_dir)
+                folder_path = f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/{str(dataset_name)}/{str(subset_train_size)}_{str(subset_train_seed)}"
                 os.makedirs(folder_path, exist_ok=True)
 
                 # Save all splits to disk
@@ -204,7 +207,6 @@ def execute_repeated_cv(
 
                 print(f"\n✅ PREPROCESSED DATA (including downsampled train) SAVED to: {folder_path}\n")
             # ======================= #
-
     
             preprocess_time = datetime.now() - start_time
             start_time = datetime.now()
@@ -224,12 +226,12 @@ def execute_repeated_cv(
             )
             train_time = datetime.now() - start_time
 
-            # [DEBUG]
-            # ✅ Stop after repetition 0 and fold 0
+            # ------------  ADDED TO STOP AFTER X ROUNDS OF DATA LOADING ---------------- # 
+            # Stop after repetition 0 and fold 0
             if repetition == 0 and fold_index == 0:
                 logging.info("Stopping after repetition 0, fold 0.")
                 return agg_loss
-            # [DEBUG]
+            # ------------------------------------------------------------ # 
             
             log_full_line(
                 f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
