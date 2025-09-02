@@ -283,12 +283,11 @@ the [HiRID benchmark](https://github.com/ratschlab/HIRID-ICU-Benchmark/). We tha
 encourage further development to benefit the scientific community. The demo datasets have been released under
 an [Open Data Commons Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/1-0/).
 
-# Self-supervised Learning extension ()
+# Self-supervised Learning extension
+The following section lays out the exact command needed to reproduce the results from the self-supervised extensions made to the original YAIB repositiry. The commands points to the data, model and gin configuration files with the final fine-tuned hyperparameters
 
 ### Pooling datasets
 To pool the datasets used for pre-training following the instructions of `YAIB/icu_benchmarks/data/dataset_pooling.ipynb`
-
-To reproduce the results from the self-supervised extension run the following commands that points to the gin configuration files with the fine-tuned hyperparameters
 
 ### Pre-training  
 ```
