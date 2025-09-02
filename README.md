@@ -285,13 +285,12 @@ an [Open Data Commons Open Database License (ODbL)](https://opendatacommons.org/
 
 # Self-supervised Learning extension ()
 
-Pooling datasets
-```
-```
+### Pooling datasets
+To pool the datasets used for pre-training following the instructions of `YAIB/icu_benchmarks/data/dataset_pooling.ipynb`
 
 To reproduce the results from the self-supervised extension run the following commands that points to the gin configuration files with the fine-tuned hyperparameters
 
-Pre-training  
+### Pre-training  
 ```
 # Pre-train on eICU + MIMIC-IV pooled 
 icu-benchmarks train     -d $DATA_DIR/los/eicu_miiv_None     -n eicu_miiv     -t Regression     -tn LOS     -m SSL_BAT_tuned_eicu_miiv     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
@@ -303,7 +302,7 @@ icu-benchmarks train     -d $DATA_DIR/los/eicu_mimic_None     -n eicu_mimic     
 icu-benchmarks train     -d $DATA_DIR/los/mimic_miiv_None     -n mimic_miiv     -t Regression     -tn LOS     -m SSL_BAT_tuned_mimic_miiv     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
 ```
 
-Baseline models trained from scratch 
+### Baseline models trained from scratch 
 
 BAT
 ```
@@ -443,6 +442,7 @@ done
 ```
 When the baselines models are trained, data subsets for the 5 seeds are generated and saved under `/YAIB/icu_benchmarks/data/preprocessed_data/` . These can then be used to directly for fine-tuning the pre-trained models.
 
+### Fine-tuning
 After runing pre-training, finetuning for each of the held-out datasets can be achieved with the following commands
 ```
 # Fine-tune on MIMIC-III
