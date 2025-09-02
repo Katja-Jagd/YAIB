@@ -444,7 +444,20 @@ When the baselines models are trained, data subsets for the 5 seeds are generate
 ### Fine-tuning
 After runing pre-training, finetuning for each of the held-out datasets can be achieved with the following commands
 ```
-# Fine-tune on MIMIC-III
+# Fine-tune on MIMIC-III, binary classification head
+python icu_benchmarks/fine_tuning.py \
+  --model_path $MIMIC-III_MODEL_DIR/model.ckpt \
+  --dataset mimic \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --fine_tune_head 
+  --bz 64 \
+  --lr 1e-02
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
+
+# Fine-tune on MIMIC-III, full model
 python icu_benchmarks/fine_tuning.py \
   --model_path $MIMIC-III_MODEL_DIR/model.ckpt \
   --dataset mimic \
@@ -456,7 +469,20 @@ python icu_benchmarks/fine_tuning.py \
   --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
-# Fine-tune on MIMIC-IV
+# Fine-tune on MIMIC-IV, binary classification head
+python icu_benchmarks/fine_tuning.py \
+  --model_path $MIMIC-IV_MODEL_DIR/model.ckpt \
+  --dataset miiv \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --fine_tune_head 
+  --bz 64 \
+  --lr 5e-3 \
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
+
+# Fine-tune on MIMIC-IV, full model 
 python icu_benchmarks/fine_tuning.py \
   --model_path $MIMIC-IV_MODEL_DIR/model.ckpt \
   --dataset miiv \
@@ -468,20 +494,31 @@ python icu_benchmarks/fine_tuning.py \
   --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
-# Fine-tune on eICU
+# Fine-tune on eICU, binary classification head
 python icu_benchmarks/fine_tuning.py \
   --model_path $EICU_MODEL_DIR/model.ckpt \
   --dataset eicu \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
   --seeds 42,84,126,168,210 \
+  --fine_tune_head 
   --bz 24 \
-  --lr 9e-3 \
+  --lr 7e-3 \
   --num_epochs 200 \
   --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
+# Fine-tune on eICU, full model
+python icu_benchmarks/fine_tuning.py \
+  --model_path $EICU_MODEL_DIR/model.ckpt \
+  --dataset eicu \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --bz 64 \
+  --lr 5e-4 \
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 ```
-Add this flag `--fine_tune_head` to only finetune the head 
 
 # License
 
