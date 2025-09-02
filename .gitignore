@@ -145,5 +145,5 @@ HPC_script_*
 preprocessed_data/
 
 # Ignore fine-tuning results
-finetuning_results/
+finetuning_results/*
 
