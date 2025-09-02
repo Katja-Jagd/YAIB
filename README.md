@@ -283,6 +283,207 @@ the [HiRID benchmark](https://github.com/ratschlab/HIRID-ICU-Benchmark/). We tha
 encourage further development to benefit the scientific community. The demo datasets have been released under
 an [Open Data Commons Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/1-0/).
 
+# Self-supervised Learning extension ()
+
+Pooling datasets
+```
+```
+
+To reproduce the results from the self-supervised extension run the following commands that points to the gin configuration files with the fine-tuned hyperparameters
+
+Pre-training  
+```
+# Pre-train on eICU + MIMIC-IV pooled 
+icu-benchmarks train     -d $DATA_DIR/los/eicu_miiv_None     -n eicu_miiv     -t Regression     -tn LOS     -m SSL_BAT_tuned_eicu_miiv     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
+
+# Pre-train on eICU + MIMIC-III pooled 
+icu-benchmarks train     -d $DATA_DIR/los/eicu_mimic_None     -n eicu_mimic     -t Regression     -tn LOS     -m SSL_BAT_tuned_eicu_mimic     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
+
+# Pre-train on MIMIC-III + MIMIV-IV pooled 
+icu-benchmarks train     -d $DATA_DIR/los/mimic_miiv_None     -n mimic_miiv     -t Regression     -tn LOS     -m SSL_BAT_tuned_mimic_miiv     -gc     -lc -s 2222     -l ../yaib_logs/ --wandb-sweep
+```
+
+Baseline models trained from scratch 
+
+BAT
+```
+# Train on MIMIC-III from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/mimic \
+            -n mimic \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m BAT_tuned_mimic \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+
+# Train on MIMIC-IV from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/miiv \
+            -n miiv \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m BAT_tuned_miiv \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+
+# Train on eICU from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/eicu \
+            -n eicu \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m BAT_tuned_eicu \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+```
+Transformer
+```
+# Train on MIMIC-III from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/mimic \
+            -n mimic \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m Transformer_tuned_mimic \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+
+# Train on MIMIC-IV from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/miiv \
+            -n miiv \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m Transformer_tuned_miiv \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+
+# Train on eICU from scratch
+train_sizes="100 500 1000 2000 3000 5000 7000 9000 9506"
+seeds="42 84 126 168 210"
+
+# Loop over train sizes and seeds
+for train_size in $train_sizes; do
+    for seed in $seeds; do
+        echo "Running with train size $train_size and seed $seed"
+        icu-benchmarks train \
+            -d $DATA_DIR/mortality24/eicu \
+            -n eicu \
+            -t BinaryClassification \
+            -tn Mortality24 \
+            -m Transformer_tuned_eicu \
+            -gc \
+            -lc \
+            -s 2222 \
+            -l ../yaib_logs/ \
+            -hp execute_repeated_cv.subset_train_size=$train_size execute_repeated_cv.subset_train_seed=$seed
+    done
+done
+```
+When the baselines models are trained, data subsets for the 5 seeds are generated and saved under `/YAIB/icu_benchmarks/data/preprocessed_data/` . These can then be used to directly for fine-tuning the pre-trained models.
+
+After runing pre-training, finetuning for each of the held-out datasets can be achieved with the following commands
+```
+# Fine-tune on MIMIC-III
+python icu_benchmarks/fine_tuning.py \
+  --model_path $MIMIC-III_MODEL_DIR/model.ckpt \
+  --dataset mimic \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --bz 64 \
+  --lr 9e-05
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
+
+# Fine-tune on MIMIC-IV
+python icu_benchmarks/fine_tuning.py \
+  --model_path $MIMIC-IV_MODEL_DIR/model.ckpt \
+  --dataset miiv \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --bz 24 \
+  --lr 7e-4 \
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
+
+# Fine-tune on eICU
+python icu_benchmarks/fine_tuning.py \
+  --model_path $EICU_MODEL_DIR/model.ckpt \
+  --dataset eicu \
+  --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
+  --seeds 42,84,126,168,210 \
+  --bz 24 \
+  --lr 9e-3 \
+  --num_epochs 200 \
+  --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
+  --gin_config /YAIB/configs/tasks/BinaryClassification.gin
+
+```
+Add this flag `--fine_tune_head` to only finetune the head 
+
 # License
 
 This source code is released under the MIT license, included [here](LICENSE). We do not own any of the datasets used or
