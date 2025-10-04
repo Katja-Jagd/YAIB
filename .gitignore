@@ -146,4 +146,4 @@ preprocessed_data/
 
 # Ignore fine-tuning results
 finetuning_results/*
-/work3/s185395/YAIB/icu_benchmarks/tuning/hp_tuning_results/*
+icu_benchmarks/tuning/hp_tuning_results/*
