@@ -286,6 +286,8 @@ an [Open Data Commons Open Database License (ODbL)](https://opendatacommons.org/
 # Self-supervised Learning extension
 The following section lays out the exact command needed to reproduce the results from the self-supervised extensions made to the original YAIB repositiry. The commands points to the data, model and gin configuration files with the final fine-tuned hyperparameters
 
+The final pre-trained models can be found at: https://huggingface.co/Katja-Jagd/models#repos
+
 ### Pooling datasets
 To pool the datasets used for pre-training following the instructions of `YAIB/icu_benchmarks/data/dataset_pooling.ipynb`
 
