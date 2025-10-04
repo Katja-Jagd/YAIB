@@ -146,4 +146,4 @@ preprocessed_data/
 
 # Ignore fine-tuning results
 finetuning_results/*
-
+hp_tuning_resuts/*
