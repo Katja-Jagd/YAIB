@@ -410,7 +410,12 @@ for lr, data in metrics_by_lr.items():
         }
 
 # Build the filename
-filename = f"/work3/s185395/YAIB/icu_benchmarks/tuning/hp_tuning_results/fine_tuning_hp_tuning_{fine_tuning_dataset}_{size}.txt"
+if fine_tune_head == True:
+    filename = f"/work3/s185395/YAIB/icu_benchmarks/tuning/hp_tuning_results/head/fine_tuning_hp_tuning_{fine_tuning_dataset}_{size}.txt"
+elif fine_tune_head == False:
+    filename = f"/work3/s185395/YAIB/icu_benchmarks/tuning/hp_tuning_results/full/fine_tuning_hp_tuning_{fine_tuning_dataset}_{size}.txt"
+else:
+    print('Cannot save file, select either finetuning for head or full model weights in command line argument')
 
 # Save using plain text
 with open(filename, 'w') as f:
