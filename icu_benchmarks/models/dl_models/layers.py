@@ -52,7 +52,7 @@ class PositionalEncoding(nn.Module):
         bs, n, emb = x.size()
         return x + self.pe[:, :n, :]
 
-class PositionalEncoding_scaled(nn.Module):
+class PositionalEncodingScaled(nn.Module):
     """
     Time-based positional encoding, adapted from Raindrop: 
     https://github.com/mims-harvard/Raindrop/tree/892eb5734e84aa8d18476c6a8975b55b2f30e1d1
