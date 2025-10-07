@@ -2,6 +2,7 @@ import gin
 import math
 import torch
 import torch.nn as nn
+import numpy as np
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 
@@ -51,6 +52,26 @@ class PositionalEncoding(nn.Module):
         bs, n, emb = x.size()
         return x + self.pe[:, :n, :]
 
+class PositionalEncoding_scaled(nn.Module):
+    """
+    Time-based positional encoding, adapted from Raindrop: 
+    https://github.com/mims-harvard/Raindrop/tree/892eb5734e84aa8d18476c6a8975b55b2f30e1d1
+    """
+    def __init__(self, d_model, max_len=500):
+        super().__init__()
+        self.max_len = max_len
+        self._num_timescales = d_model // 2
+
+    def getPE(self, P_time):
+        P_time = P_time.float()
+        timescales = self.max_len ** np.linspace(0, 1, self._num_timescales)
+        scaled_time = P_time.unsqueeze(-1) / torch.tensor(timescales, device=P_time.device)
+        pe = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=-1)
+        return pe
+
+    def forward(self, P_time):
+        return self.getPE(P_time)
+        
 
 class SelfAttention(nn.Module):
     """Multi Head Attention block from Attention is All You Need (https://arxiv.org/abs/1706.03762). Input has shape
@@ -314,3 +335,16 @@ class TemporalBlock(nn.Module):
         out = self.net(x)
         res = x if self.downsample is None else self.downsample(x)
         return self.relu(out + res)
+
+
+    def masked_mean_pooling(datatensor, mask):
+        mask_expanded = mask.unsqueeze(-1).expand(datatensor.size()).float()
+        data_summed = torch.sum(datatensor * mask_expanded, dim=1)
+        data_counts = mask_expanded.sum(1).clamp(min=1e-9)
+        return data_summed / data_counts
+
+    def masked_max_pooling(datatensor, mask):
+        mask_expanded = mask.unsqueeze(-1).expand(datatensor.size()).float()
+        datatensor = datatensor.clone()
+        datatensor[mask_expanded == 0] = -1e9
+        return torch.max(datatensor, 1)[0]
