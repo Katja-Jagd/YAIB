@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# finetune_bat.py
+# fine_tuning_regression.py - Fine-tuning script for regression tasks (e.g., Length of Stay)
 import os
 import json
 import hashlib
@@ -16,29 +16,18 @@ import random
 import numpy as np
 import polars as pl
 from tqdm import tqdm
-import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from torch.utils.data import DataLoader
 
 # ICU Benchmarks (your repo)
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.loader import BATPolarsDataset
-from icu_benchmarks.models.dl_models.bat import SSL_BAT, EncoderPrediction, BinaryClassificationHead
-from icu_benchmarks.cross_validation import execute_repeated_cv
-from icu_benchmarks.constants import RunMode
-from icu_benchmarks.run import get_mode
-from icu_benchmarks.data.preprocessor import (
-    Preprocessor,
-    PandasClassificationPreprocessor,
-    PolarsClassificationPreprocessor,
-)
-from icu_benchmarks.models.train import load_model
-from icu_benchmarks.p19_to_mimic_feature_map import P19ToMIMICFeatureMapper
+from icu_benchmarks.models.dl_models.bat import SSL_BAT, EncoderPrediction, RegressionHead
 
 # -------------------------
 # Configurable variable map
 # -------------------------
-VARS_DICT_MIMIC = {
+VARS_DICT = {
     "GROUP": "stay_id",
     "SEQUENCE": "time",
     "LABEL": "label",
@@ -49,32 +38,6 @@ VARS_DICT_MIMIC = {
     ],
     "STATIC": ["age", "sex", "height", "weight"],
 }
-
-# Physionet 2019 (p19) variable map
-VARS_DICT_P19 = {
-    "GROUP": "stay_id",
-    "SEQUENCE": "time",
-    "LABEL": "label",
-    "DYNAMIC": [
-        'HR', 'O2Sat', 'Temp', 'SBP', 'MAP', 'DBP', 'Resp', 'EtCO2',
-        'BaseExcess', 'HCO3', 'FiO2', 'pH', 'PaCO2', 'SaO2', 'AST', 'BUN',
-        'Alkalinephos', 'Calcium', 'Chloride', 'Creatinine', 'Bilirubin_direct',
-        'Glucose', 'Lactate', 'Magnesium', 'Phosphate', 'Potassium',
-        'Bilirubin_total', 'TroponinI', 'Hct', 'Hgb', 'PTT', 'WBC',
-        'Fibrinogen', 'Platelets'
-    ],
-    "STATIC": ['Age', 'Gender', 'Unit1', 'Unit2'],
-}
-
-def get_vars_dict(dataset: str):
-    """Get the appropriate VARS_DICT for the dataset."""
-    if dataset == "p19":
-        return VARS_DICT_P19
-    else:
-        return VARS_DICT_MIMIC
-
-# Default for backward compatibility
-VARS_DICT = VARS_DICT_MIMIC
 
 # -------------------------
 # Utilities
@@ -152,11 +115,10 @@ def load_subset_as_data_dict(base_dir: Path) -> Dict[str, Dict[str, pl.DataFrame
     return data
 
 
-def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]], dataset: str = "mimic") -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
-    vars_dict = get_vars_dict(dataset)
-    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
-    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
-    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
+def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]]) -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
+    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
+    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
+    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
     return train_set, val_set, test_set
 
 
@@ -173,15 +135,15 @@ def build_model_from_ckpt(ckpt_path: Path) -> EncoderPrediction:
         for k, v in ckpt["state_dict"].items()
         if k.startswith("model.encoder_class.")
     }
-    model.model.encoder_class.load_state_dict(encoder_state_dict)
+    model.model.encoder_class.load_state_dict(encoder_state_dict, strict=False)
 
-    # Build classification wrapper with pretrained encoder
-    classification_model = EncoderPrediction(
+    # Build regression wrapper with pretrained encoder
+    regression_model = EncoderPrediction(
         encoder_class=model.model.encoder_class,
-        prediction_head=BinaryClassificationHead,
-        prediction_head_kwargs={"num_classes": 2},
+        prediction_head=RegressionHead,
+        prediction_head_kwargs={"output_dim": 1},
     )
-    return classification_model
+    return regression_model
 
 
 @dataclass
@@ -210,8 +172,9 @@ class RunResult:
     fine_tune_head: bool
     model_path: str
     avg_test_loss: float
-    test_auroc: float
-    test_auprc: float
+    test_mse: float
+    test_mae: float
+    test_r2: float
 
 
 def train_eval_one(config: RunConfig) -> RunResult:
@@ -219,8 +182,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
     if config.gin_config:
         parse_gin_config(config.gin_config)
 
-
-    # fixed seed for training procedure (you asked to keep subset variability only)
+    # fixed seed for training procedure
     set_seeds(42)
 
     # data paths
@@ -228,31 +190,27 @@ def train_eval_one(config: RunConfig) -> RunResult:
     data = load_subset_as_data_dict(subset_path)
 
     # datasets & loaders
-    train_set, val_set, test_set = build_datasets(data, dataset=config.dataset)
-
-    # Use feature mapping for p19 dataset to match MIMIC feature space
-    feature_mapper = P19ToMIMICFeatureMapper() if config.dataset == "p19" else None
-
+    train_set, val_set, test_set = build_datasets(data)
     g = torch.Generator().manual_seed(42)
     train_loader = DataLoader(
         train_set,
         batch_size=config.batch_size,
         shuffle=True,
         generator=g,
-        collate_fn=train_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=train_set.collate_fn_pad_to_longest_in_batch(),
     )
     val_loader = DataLoader(
         val_set,
         batch_size=config.batch_size,
         shuffle=True,
         generator=g,
-        collate_fn=val_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=val_set.collate_fn_pad_to_longest_in_batch(),
     )
     test_loader = DataLoader(
         test_set,
         batch_size=config.batch_size,
         shuffle=False,
-        collate_fn=test_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=test_set.collate_fn_pad_to_longest_in_batch(),
     )
 
     # device
@@ -273,10 +231,10 @@ def train_eval_one(config: RunConfig) -> RunResult:
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
-    loss_fn = torch.nn.CrossEntropyLoss()
+    loss_fn = torch.nn.MSELoss()
 
     patience = 3
-    best_val_auprc = 0.0
+    best_val_mse = float('inf')
     epochs_without_improvement = 0
     best_state = None
 
@@ -285,8 +243,8 @@ def train_eval_one(config: RunConfig) -> RunResult:
         # TRAIN
         model.train()
         total_train_loss = 0.0
-        all_train_labels: List[int] = []
-        all_train_probs: List[float] = []
+        all_train_labels: List[float] = []
+        all_train_preds: List[float] = []
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} (train)")
         for batch in pbar:
@@ -295,34 +253,28 @@ def train_eval_one(config: RunConfig) -> RunResult:
             mask = mask.to(device).float()
             times = times.to(device).float()
             static = static.to(device).float()
-            label = label.to(device).long()
-
-            # Convert timestep-level labels to patient-level (for sequential tasks like sepsis)
-            # If label is 2D [batch, timesteps], reduce to 1D [batch] by taking max
-            if label.dim() > 1:
-                label = label.max(dim=1)[0]  # 1 if sepsis occurs at any timestep, 0 otherwise
+            label = label.to(device).float()
 
             optimizer.zero_grad()
-            logits = model(x, static=static, time=times, sensor_mask=mask)
-            loss = loss_fn(logits, label)
+            pred = model(x, static=static, time=times, sensor_mask=mask)
+            loss = loss_fn(pred, label)
             loss.backward()
             optimizer.step()
 
             total_train_loss += loss.item()
-            probs = F.softmax(logits, dim=1)[:, 1]
             all_train_labels.extend(label.detach().cpu().numpy())
-            all_train_probs.extend(probs.detach().cpu().numpy())
+            all_train_preds.extend(pred.detach().cpu().numpy())
             pbar.set_postfix(loss=loss.item())
 
         avg_train_loss = total_train_loss / max(1, len(train_loader))
-        train_auroc = roc_auc_score(all_train_labels, all_train_probs)
-        train_auprc = average_precision_score(all_train_labels, all_train_probs)
+        train_mse = mean_squared_error(all_train_labels, all_train_preds)
+        train_mae = mean_absolute_error(all_train_labels, all_train_preds)
 
         # VAL
         model.eval()
         total_val_loss = 0.0
-        all_val_labels: List[int] = []
-        all_val_probs: List[float] = []
+        all_val_labels: List[float] = []
+        all_val_preds: List[float] = []
         with torch.no_grad():
             for batch in val_loader:
                 x, mask, label, times, static, *_ = batch
@@ -330,40 +282,35 @@ def train_eval_one(config: RunConfig) -> RunResult:
                 mask = mask.to(device).float()
                 times = times.to(device).float()
                 static = static.to(device).float()
-                label = label.to(device).long()
+                label = label.to(device).float()
 
-                # Convert timestep-level labels to patient-level
-                if label.dim() > 1:
-                    label = label.max(dim=1)[0]
-
-                logits = model(x, static=static, time=times, sensor_mask=mask)
-                loss = loss_fn(logits, label)
+                pred = model(x, static=static, time=times, sensor_mask=mask)
+                loss = loss_fn(pred, label)
                 total_val_loss += loss.item()
-                probs = F.softmax(logits, dim=1)[:, 1]
                 all_val_labels.extend(label.cpu().numpy())
-                all_val_probs.extend(probs.cpu().numpy())
+                all_val_preds.extend(pred.cpu().numpy())
 
         avg_val_loss = total_val_loss / max(1, len(val_loader))
-        val_auroc = roc_auc_score(all_val_labels, all_val_probs)
-        val_auprc = average_precision_score(all_val_labels, all_val_probs)
+        val_mse = mean_squared_error(all_val_labels, all_val_preds)
+        val_mae = mean_absolute_error(all_val_labels, all_val_preds)
 
         print(
             f"Epoch {epoch+1}: "
-            f"train_loss={avg_train_loss:.4f} auroc={train_auroc:.4f} auprc={train_auprc:.4f} | "
-            f"val_loss={avg_val_loss:.4f} auroc={val_auroc:.4f} auprc={val_auprc:.4f}"
+            f"train_loss={avg_train_loss:.4f} mse={train_mse:.4f} mae={train_mae:.4f} | "
+            f"val_loss={avg_val_loss:.4f} mse={val_mse:.4f} mae={val_mae:.4f}"
         )
 
         scheduler.step()
 
-        # early stopping by AUPRC
-        if val_auprc > best_val_auprc:
-            best_val_auprc = val_auprc
+        # early stopping by MSE
+        if val_mse < best_val_mse:
+            best_val_mse = val_mse
             best_state = deepcopy(model.state_dict())
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
-                print(f"Early stopping after {patience} epochs without val AUPRC improvement.")
+                print(f"Early stopping after {patience} epochs without val MSE improvement.")
                 break
 
     # restore best
@@ -373,8 +320,8 @@ def train_eval_one(config: RunConfig) -> RunResult:
     # TEST
     model.eval()
     total_test_loss = 0.0
-    all_test_labels: List[int] = []
-    all_test_probs: List[float] = []
+    all_test_labels: List[float] = []
+    all_test_preds: List[float] = []
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
         for batch in pbar:
@@ -383,29 +330,28 @@ def train_eval_one(config: RunConfig) -> RunResult:
             mask = mask.to(device).float()
             times = times.to(device).float()
             static = static.to(device).float()
-            label = label.to(device).long()
+            label = label.to(device).float()
 
-            # Convert timestep-level labels to patient-level
-            if label.dim() > 1:
-                label = label.max(dim=1)[0]
-
-            logits = model(x, static=static, time=times, sensor_mask=mask)
-            loss = loss_fn(logits, label)
+            pred = model(x, static=static, time=times, sensor_mask=mask)
+            loss = loss_fn(pred, label)
             total_test_loss += loss.item()
 
-            probs = F.softmax(logits, dim=1)[:, 1]
+            # if label.shape is empty, turn into tensor
+            if label.dim() == 0:
+                label = label.unsqueeze(0)
             all_test_labels.extend(label.cpu().numpy())
-            all_test_probs.extend(probs.cpu().numpy())
+            all_test_preds.extend(pred.cpu().numpy())
             pbar.set_postfix(loss=loss.item())
 
     avg_test_loss = total_test_loss / max(1, len(test_loader))
-    test_auroc = roc_auc_score(all_test_labels, all_test_probs)
-    test_auprc = average_precision_score(all_test_labels, all_test_probs)
+    test_mse = mean_squared_error(all_test_labels, all_test_preds)
+    test_mae = mean_absolute_error(all_test_labels, all_test_preds)
+    test_r2 = r2_score(all_test_labels, all_test_preds)
 
     print(
         "\nTEST RESULTS "
         f"(dataset={config.dataset}, size={config.size}, seed={config.seed}): "
-        f"loss={avg_test_loss:.4f} auroc={test_auroc:.4f} auprc={test_auprc:.4f}"
+        f"loss={avg_test_loss:.4f} mse={test_mse:.4f} mae={test_mae:.4f} r2={test_r2:.4f}"
     )
 
     return RunResult(
@@ -418,8 +364,9 @@ def train_eval_one(config: RunConfig) -> RunResult:
         fine_tune_head=config.fine_tune_head,
         model_path=config.model_path,
         avg_test_loss=avg_test_loss,
-        test_auroc=test_auroc,
-        test_auprc=test_auprc,
+        test_mse=test_mse,
+        test_mae=test_mae,
+        test_r2=test_r2,
     )
 
 
@@ -435,19 +382,21 @@ def parse_int_list(arg: str) -> List[int]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune SSL_BAT on ICU subsets and aggregate results.")
+    parser = argparse.ArgumentParser(description="Fine-tune SSL_BAT on regression tasks (e.g., Length of Stay)")
     parser.add_argument("--model_path", required=True, type=str, help="Path to pretrained checkpoint .ckpt")
-    parser.add_argument("--dataset", default="mimic", type=str, choices=["eicu", "miiv", "mimic", "p19"])
+    parser.add_argument("--dataset", default="mimic_los", type=str,
+                        choices=["eicu_los", "miiv_los", "mimic_los", "mimic_los_regression", "p19_los"],
+                        help="Dataset name (e.g., mimic_los, mimic_los_regression)")
     parser.add_argument("--sizes", default="9506", type=str, help='e.g. "100,500,1000" or "100:9000:100"')
     parser.add_argument("--seeds", default="42", type=str, help='e.g. "42,84,126"')
-    parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the classification head")
+    parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the regression head")
     parser.add_argument("--bz", default=32, type=int, help="Batch size")
     parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate")
     parser.add_argument("--num_epochs", default=200, type=int)
     parser.add_argument("--subset_root", default="icu_benchmarks/data/preprocessed_data", type=str,
-                        help="Root path that contains {dataset}/{size}_{seed}/ parquet files")
+                        help="Root path that contains {dataset}/{size}_{seed}/ parquet files (relative or absolute)")
     parser.add_argument("--gin_config", default="", type=str,
-                        help="Optional gin config file (e.g., configs/tasks/SepsisFineTuning.gin for p19); leave empty to skip")
+                        help="Optional gin config file (not required for fine-tuning); leave empty to skip")
 
     args = parser.parse_args()
 
@@ -458,9 +407,6 @@ def main():
     mode_str = "head" if args.fine_tune_head else "full"
 
     # Build automatic output_dir
-    # Map flag -> mode for path naming
-    mode_str = "head" if args.fine_tune_head else "full"
-    # Build automatic output_dir (relative to current directory)
     output_dir = Path(f"finetuning_results/pretrained_BAT/{args.dataset}/{mode_str}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -510,6 +456,8 @@ def main():
                 result = train_eval_one(run_cfg)
             except Exception as e:
                 print(f"[ERROR] size={size} seed={seed}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
             all_results.append(result)
@@ -533,4 +481,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
