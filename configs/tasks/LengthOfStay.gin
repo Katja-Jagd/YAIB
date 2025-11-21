@@ -1,35 +1,9 @@
-# Length of Stay Prediction Task Configuration
-# This config supports both full training (with cross-validation) and fine-tuning
+# LENGTH OF STAY EXPERIMENT CONFIGURATION
 
-# COMMON IMPORTS
-include "configs/tasks/common/Imports.gin"
+# IMPORT BASE REGRESSION CONFIGURATION
+include "configs/tasks/Regression.gin"
 
-# DATASET CONFIGURATION
-include "configs/tasks/common/PredictionTaskVariables.gin"
-
-# CROSS-VALIDATION (not used during fine-tuning - fine-tuning script has its own loop)
-include "configs/tasks/common/CrossValidation.gin"
-
-# MODE SETTINGS (required for both full training and fine-tuning)
-Run.mode = "Regression"
-NUM_CLASSES = 1
-HORIZON = 24
-train_common.weight = "balanced"
-train_common.ram_cache = True
-
-# DEEP LEARNING
-DLPredictionWrapper.loss = @mse_loss
-MLWrapper.loss = @mean_squared_error
-
-# SELECTING PREPROCESSOR
-preprocess.preprocessor = @base_regression_preprocessor
-preprocess.vars = %vars
-preprocess.use_static = True
-
-# SPECIFYING REGRESSION OUTCOME SCALING FOR LENGTH OF STAY
-# 0-336 hours (14 days) as max
+# LENGTH OF STAY SPECIFIC OVERRIDES
+# Override outcome scaling for length of stay: 0-336 hours (14 days) as max
 base_regression_preprocessor.outcome_min = 0
 base_regression_preprocessor.outcome_max = 336
-
-# SELECTING DATASET
-include "configs/tasks/common/Dataloader.gin"

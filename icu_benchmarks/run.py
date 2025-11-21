@@ -19,6 +19,7 @@ from icu_benchmarks.run_utils import (
     import_preprocessor,
     name_datasets,
     get_config_files,
+    get_task_gin_and_name,
 )
 from icu_benchmarks.constants import RunMode
 
@@ -44,13 +45,17 @@ def main(my_args=tuple(sys.argv[1:])):
     # Get arguments
     data_dir = Path(args.data_dir)
     name = args.name
-    task = args.task
+    task_input = args.task
     model = args.model
     reproducible = args.reproducible
     evaluate = args.eval
     experiment = args.experiment
     source_dir = args.source_dir
     modalities = args.modalities
+
+    # Map task name to gin config and folder name
+    task_gin, task_name = get_task_gin_and_name(task_input)
+
     if modalities:
         logging.debug(f"Binding modalities: {modalities}")
         gin.bind_parameter("preprocess.selected_modalities", modalities)
@@ -58,13 +63,13 @@ def main(my_args=tuple(sys.argv[1:])):
         logging.debug(f"Binding label: {args.label}")
         gin.bind_parameter("preprocess.label", args.label)
     tasks, models = get_config_files(Path("configs"))
-    if task not in tasks or model not in models:
+    if task_gin not in tasks or model not in models:
         raise ValueError(
-            f"Invalid task or model. Task: {task} {'not ' if task not in tasks else ''} found. "
+            f"Invalid task or model. Task gin: {task_gin} {'not ' if task_gin not in tasks else ''} found. "
             f"Model: {model} {'not ' if model not in models else ''}found."
         )
     # Load task config
-    gin.parse_config_file(f"configs/tasks/{task}.gin")
+    gin.parse_config_file(f"configs/tasks/{task_gin}.gin")
     mode = get_mode()
 
     # Set experiment name
@@ -92,7 +97,7 @@ def main(my_args=tuple(sys.argv[1:])):
     log_dir = (
         (log_dir_name / experiment)
         if experiment
-        else (log_dir_name / (args.task_name if args.task_name is not None else args.task) / model)
+        else (log_dir_name / task_name / model)
     )
     log_full_line(f"Logging to {log_dir}.", logging.INFO)
 
@@ -154,7 +159,7 @@ def main(my_args=tuple(sys.argv[1:])):
         gin_config_files = (
             [Path(f"configs/experiments/{args.experiment}.gin")]
             if args.experiment
-            else [model_path, Path(f"configs/tasks/{task}.gin")]
+            else [model_path, Path(f"configs/tasks/{task_gin}.gin")]
         )
         gin.parse_config_files_and_bindings(gin_config_files, args.hyperparams, finalize_config=False)
         log_full_line(f"Data directory: {data_dir.resolve()}", level=logging.INFO)
@@ -201,6 +206,8 @@ def main(my_args=tuple(sys.argv[1:])):
         cpu=args.cpu,
         wandb=args.wandb_sweep,
         complete_train=args.complete_train,
+        task_name=task_name,
+        dataset_name=name,
     )
 
     log_full_line("FINISHED TRAINING", level=logging.INFO, char="=", num_newlines=3)

@@ -38,9 +38,11 @@ def execute_repeated_cv(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
-    enable_subset_train: bool = False, # ADDED FOR SUBSET 
-    subset_train_size: int = 1000, # ADDED FOR SUBSET 
-    subset_train_seed: int = 42, # ADDED FOR SUBSET 
+    enable_subset_train: bool = False, # ADDED FOR SUBSET
+    subset_train_size: int = 1000, # ADDED FOR SUBSET
+    subset_train_seed: int = 42, # ADDED FOR SUBSET
+    task_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY TASK
+    dataset_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY DATASET NAME
 ) -> float:
     """Preprocesses data and trains a model for each fold.
 
@@ -127,9 +129,31 @@ def execute_repeated_cv(
                 seed: int = None
             ) -> pl.DataFrame:
                 """
-                Downsample a Polars DataFrame to total_samples while preserving class distribution.
+                Downsample a Polars DataFrame to total_samples.
+
+                For classification (one row per stay): preserves class distribution.
+                For regression (multiple rows per stay): samples stays, not individual rows.
                 """
-                # Step 1: Manually count classes
+                # Check if this is a multi-row-per-stay scenario (regression with timesteps)
+                rows_per_stay = df.group_by("stay_id").len()
+                max_rows_per_stay = rows_per_stay.select(pl.col("len").max()).item()
+
+                if max_rows_per_stay > 1:
+                    # Regression task: each stay has multiple timesteps
+                    # Sample at the stay level to avoid row duplication bug
+                    logging.info(f"Detected regression task (max {max_rows_per_stay} rows/stay). Sampling at stay level.")
+                    unique_stays = df.select("stay_id").unique()
+                    n_stays_to_sample = min(total_samples, len(unique_stays))
+                    sampled_stays = unique_stays.sample(n=n_stays_to_sample, with_replacement=False, seed=seed)
+                    selected_stay_ids = sampled_stays.select("stay_id").to_series().to_list()
+                    result = df.filter(pl.col("stay_id").is_in(selected_stay_ids))
+                    logging.info(f"Sampled {n_stays_to_sample} stays, resulting in {len(result)} total rows.")
+                    return result
+
+                # Classification task: one row per stay, preserve class balance
+                logging.info(f"Detected classification task (1 row/stay). Preserving class balance.")
+
+                # Step 1: Count classes
                 labels = df[label_col].unique().to_list()
                 label_counts = {}
                 total_original = 0
@@ -191,8 +215,11 @@ def execute_repeated_cv(
                 data["train"]["FEATURES"] = downsampled_features
 
                 # Define path to save the preprocessed (and downsampled) data
-                dataset_name = os.path.basename(data_dir)
-                folder_path = f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/{str(dataset_name)}/{str(subset_train_size)}_{str(subset_train_seed)}"
+                # Include task_name in path to organize by task
+                # Use dataset_name parameter if provided, otherwise fall back to data_dir basename
+                ds_name = dataset_name if dataset_name else os.path.basename(data_dir)
+                task_folder = task_name if task_name else "default_task"
+                folder_path = f"/isdata/winthergrp/gsn245/scratch/YAIB/icu_benchmarks/data/preprocessed_data/{task_folder}/{str(ds_name)}/{str(subset_train_size)}_{str(subset_train_seed)}"
                 os.makedirs(folder_path, exist_ok=True)
 
                 # Save all splits to disk
@@ -228,9 +255,11 @@ def execute_repeated_cv(
 
             # ------------  ADDED TO STOP AFTER X ROUNDS OF DATA LOADING ---------------- # 
             # Stop after repetition 0 and fold 0
+            """
             if repetition == 0 and fold_index == 0:
                 logging.info("Stopping after repetition 0, fold 0.")
                 return agg_loss
+            """
             # ------------------------------------------------------------ # 
             
             log_full_line(

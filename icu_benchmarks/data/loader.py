@@ -47,10 +47,7 @@ class CommonPolarsDataset(Dataset):
         if "SEQUENCE" in self.vars and self.vars["SEQUENCE"] in data[split][Segment.features].columns:
             # We have a time series dataset
             self.row_indicators = data[split][Segment.features][self.vars["GROUP"], self.vars["SEQUENCE"]]
-            # Convert time to hours if it's a Duration type, otherwise assume it's already numeric
-            if self.row_indicators[self.vars["SEQUENCE"]].dtype == pl.Duration:
-                self.row_indicators = self.row_indicators.with_columns(pl.col(self.vars["SEQUENCE"]).dt.total_hours())
-            # If already numeric (Float64), keep as is
+            self.row_indicators = self.row_indicators.with_columns(pl.col(self.vars["SEQUENCE"]).dt.total_hours())
             self.features_df = data[split][Segment.features]
             self.features_df = self.features_df.sort([self.vars["GROUP"], self.vars["SEQUENCE"]])
             #self.features_df = self.features_df.drop(self.vars["SEQUENCE"])
@@ -486,11 +483,10 @@ class ImputationPredictionDataset(Dataset):
         return from_numpy(window.values).to(float32)
 
 class PadToLongestCollator:
-    def __init__(self, runmode, pad_1d_tensor, pad_2d_tensor, feature_mapping=None):
+    def __init__(self, runmode, pad_1d_tensor, pad_2d_tensor):
         self.runmode = runmode
         self.pad_1d_tensor = pad_1d_tensor
         self.pad_2d_tensor = pad_2d_tensor
-        self.feature_mapping = feature_mapping  # P19 to MIMIC mapping
 
     def __call__(self, batch):
         #print(f"[DEBUG] PadToLongestCollator called in pid={os.getpid()}, batch size={len(batch)}")
@@ -505,15 +501,7 @@ class PadToLongestCollator:
         data = torch.stack([self.pad_2d_tensor(x, max_len) for x in data])
         #print("[DEBUG] data padded")
 
-        # (exclusively P19 -> MIMIC)
-        if self.feature_mapping is not None:
-            data = self.feature_mapping.transform_features(data)
-            #print(f"[DEBUG] Applied feature mapping: {data.shape}")
-
         mask = torch.stack([self.pad_2d_tensor(x, max_len) for x in mask])
-
-        if self.feature_mapping is not None:
-            mask = self.feature_mapping.transform_features(mask)
         delta = torch.stack([self.pad_2d_tensor(x, max_len) for x in delta])
         #print("[DEBUG] mask and delta padded")
 
@@ -570,16 +558,10 @@ class BATPolarsDataset(CommonPolarsDataset):
         #    for stay_id, df in grouped
         #    }
         grouped_outcomes = self.outcome_df.group_by(group_col, maintain_order=True)
-        if self.runmode == RunMode.regression:
-            self.outcomes_by_id = {
-                stay_id[0] if isinstance(stay_id, tuple) else stay_id: df[self.vars["LABEL"]].to_numpy()[0:1]  # Take first value only for regression
-                for stay_id, df in grouped_outcomes
-            }
-        else:
-            self.outcomes_by_id = {
-                stay_id[0] if isinstance(stay_id, tuple) else stay_id: df[self.vars["LABEL"]].to_numpy() # keep all labels
-                for stay_id, df in grouped_outcomes
-            }
+        self.outcomes_by_id = {
+            stay_id[0] if isinstance(stay_id, tuple) else stay_id: df[self.vars["LABEL"]].to_numpy()
+            for stay_id, df in grouped_outcomes
+        }
 
         static_columns = self.vars["STATIC"]
         dynamic_columns = self.vars["DYNAMIC"]
@@ -692,15 +674,9 @@ class BATPolarsDataset(CommonPolarsDataset):
         #times_raw = features.select(time_column).to_numpy().flatten()
         times_raw = features[:, col_idx[self.sequence_column]]
         # tmp solution for times normalization, should be done in preprocessing. See how R did it
-        if isinstance(times_raw[0], (np.floating, float)):
-            # Times are already numeric hours, convert to minutes
-            times_numeric = (times_raw - times_raw[0]).astype(np.float32)
-            times = times_numeric * 60  # Convert hours to minutes
-        else:
-            # Times are timedelta objects, use original conversion
-            times_numeric = (times_raw - times_raw[0]).astype('timedelta64[ms]').astype(np.float32)
-            # NO NORNALIZATION: Convert milliseconds to minutes
-            times = times_numeric / 60000  # 1 minute = 60,000 ms
+        times_numeric = (times_raw - times_raw[0]).astype('timedelta64[ms]').astype(np.float32)
+        # NO NORNALIZATION: Convert milliseconds to minutes
+        times = times_numeric / 60000  # 1 minute = 60,000 ms
         # NORMALIZATION: to [-1, 1] based on global max in milliseconds
         #times = (times_numeric / global_max_time_ms) * 2 - 1
         #print(f"[DEBUG] times computed")
@@ -762,12 +738,11 @@ class BATPolarsDataset(CommonPolarsDataset):
         pad_amt = max_len - tensor.shape[0]
         return pad(tensor, (0, pad_amt)) if pad_amt > 0 else tensor
 
-    def collate_fn_pad_to_longest_in_batch(self, feature_mapping=None):
+    def collate_fn_pad_to_longest_in_batch(self):
         return PadToLongestCollator(
         self.runmode,
         pad_1d_tensor=BATPolarsDataset.pad_1d_tensor,
-        pad_2d_tensor=BATPolarsDataset.pad_2d_tensor,
-        feature_mapping=feature_mapping
+        pad_2d_tensor=BATPolarsDataset.pad_2d_tensor
     )
 
 

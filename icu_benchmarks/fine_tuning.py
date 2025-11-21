@@ -33,12 +33,11 @@ from icu_benchmarks.data.preprocessor import (
     PolarsClassificationPreprocessor,
 )
 from icu_benchmarks.models.train import load_model
-from icu_benchmarks.p19_to_mimic_feature_map import P19ToMIMICFeatureMapper
 
 # -------------------------
 # Configurable variable map
 # -------------------------
-VARS_DICT_MIMIC = {
+VARS_DICT = {
     "GROUP": "stay_id",
     "SEQUENCE": "time",
     "LABEL": "label",
@@ -49,32 +48,6 @@ VARS_DICT_MIMIC = {
     ],
     "STATIC": ["age", "sex", "height", "weight"],
 }
-
-# Physionet 2019 (p19) variable map
-VARS_DICT_P19 = {
-    "GROUP": "stay_id",
-    "SEQUENCE": "time",
-    "LABEL": "label",
-    "DYNAMIC": [
-        'HR', 'O2Sat', 'Temp', 'SBP', 'MAP', 'DBP', 'Resp', 'EtCO2',
-        'BaseExcess', 'HCO3', 'FiO2', 'pH', 'PaCO2', 'SaO2', 'AST', 'BUN',
-        'Alkalinephos', 'Calcium', 'Chloride', 'Creatinine', 'Bilirubin_direct',
-        'Glucose', 'Lactate', 'Magnesium', 'Phosphate', 'Potassium',
-        'Bilirubin_total', 'TroponinI', 'Hct', 'Hgb', 'PTT', 'WBC',
-        'Fibrinogen', 'Platelets'
-    ],
-    "STATIC": ['Age', 'Gender', 'Unit1', 'Unit2'],
-}
-
-def get_vars_dict(dataset: str):
-    """Get the appropriate VARS_DICT for the dataset."""
-    if dataset == "p19":
-        return VARS_DICT_P19
-    else:
-        return VARS_DICT_MIMIC
-
-# Default for backward compatibility
-VARS_DICT = VARS_DICT_MIMIC
 
 # -------------------------
 # Utilities
@@ -152,11 +125,10 @@ def load_subset_as_data_dict(base_dir: Path) -> Dict[str, Dict[str, pl.DataFrame
     return data
 
 
-def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]], dataset: str = "mimic") -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
-    vars_dict = get_vars_dict(dataset)
-    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
-    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
-    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
+def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]]) -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
+    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
+    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
+    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
     return train_set, val_set, test_set
 
 
@@ -196,7 +168,6 @@ class RunConfig:
     num_epochs: int
     subset_root: str
     output_dir: str
-    gin_config: str = ""  # optional; leave empty to skip
 
 
 @dataclass
@@ -215,11 +186,6 @@ class RunResult:
 
 
 def train_eval_one(config: RunConfig) -> RunResult:
-    # optional gin
-    if config.gin_config:
-        parse_gin_config(config.gin_config)
-
-
     # fixed seed for training procedure (you asked to keep subset variability only)
     set_seeds(42)
 
@@ -228,10 +194,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
     data = load_subset_as_data_dict(subset_path)
 
     # datasets & loaders
-    train_set, val_set, test_set = build_datasets(data, dataset=config.dataset)
-
-    # Use feature mapping for p19 dataset to match MIMIC feature space
-    feature_mapper = P19ToMIMICFeatureMapper() if config.dataset == "p19" else None
+    train_set, val_set, test_set = build_datasets(data)
 
     g = torch.Generator().manual_seed(42)
     train_loader = DataLoader(
@@ -239,20 +202,20 @@ def train_eval_one(config: RunConfig) -> RunResult:
         batch_size=config.batch_size,
         shuffle=True,
         generator=g,
-        collate_fn=train_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=train_set.collate_fn_pad_to_longest_in_batch(),
     )
     val_loader = DataLoader(
         val_set,
         batch_size=config.batch_size,
         shuffle=True,
         generator=g,
-        collate_fn=val_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=val_set.collate_fn_pad_to_longest_in_batch(),
     )
     test_loader = DataLoader(
         test_set,
         batch_size=config.batch_size,
         shuffle=False,
-        collate_fn=test_set.collate_fn_pad_to_longest_in_batch(feature_mapping=feature_mapper),
+        collate_fn=test_set.collate_fn_pad_to_longest_in_batch(),
     )
 
     # device
@@ -437,7 +400,7 @@ def parse_int_list(arg: str) -> List[int]:
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune SSL_BAT on ICU subsets and aggregate results.")
     parser.add_argument("--model_path", required=True, type=str, help="Path to pretrained checkpoint .ckpt")
-    parser.add_argument("--dataset", default="mimic", type=str, choices=["eicu", "miiv", "mimic", "p19"])
+    parser.add_argument("--dataset", default="mimic", type=str, choices=["eicu", "miiv", "mimic"])
     parser.add_argument("--sizes", default="9506", type=str, help='e.g. "100,500,1000" or "100:9000:100"')
     parser.add_argument("--seeds", default="42", type=str, help='e.g. "42,84,126"')
     parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the classification head")
@@ -446,8 +409,6 @@ def main():
     parser.add_argument("--num_epochs", default=200, type=int)
     parser.add_argument("--subset_root", default="icu_benchmarks/data/preprocessed_data", type=str,
                         help="Root path that contains {dataset}/{size}_{seed}/ parquet files")
-    parser.add_argument("--gin_config", default="", type=str,
-                        help="Optional gin config file (e.g., configs/tasks/SepsisFineTuning.gin for p19); leave empty to skip")
 
     args = parser.parse_args()
 
@@ -475,7 +436,6 @@ def main():
         "lr": args.lr,
         "num_epochs": args.num_epochs,
         "subset_root": args.subset_root,
-        "gin_config": args.gin_config,
     }, sort_keys=True).encode()).hexdigest()[:10]
 
     per_run_log = output_dir / f"runs_{sweep_id}.jsonl"
@@ -504,7 +464,6 @@ def main():
                 num_epochs=args.num_epochs,
                 subset_root=args.subset_root,
                 output_dir=str(output_dir),
-                gin_config=args.gin_config or "",
             )
             try:
                 result = train_eval_one(run_cfg)

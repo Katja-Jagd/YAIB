@@ -158,6 +158,7 @@ class RunConfig:
     num_epochs: int
     subset_root: str
     output_dir: str
+    task: str = "LengthOfStay"  # task name for organizing data
     gin_config: str = ""  # optional; leave empty to skip
 
 
@@ -186,7 +187,8 @@ def train_eval_one(config: RunConfig) -> RunResult:
     set_seeds(42)
 
     # data paths
-    subset_path = Path(config.subset_root) / config.dataset / f"{config.size}_{config.seed}"
+    # Include task in path: {subset_root}/{task}/{dataset}/{size}_{seed}
+    subset_path = Path(config.subset_root) / config.task / config.dataset / f"{config.size}_{config.seed}"
     data = load_subset_as_data_dict(subset_path)
 
     # datasets & loaders
@@ -255,6 +257,11 @@ def train_eval_one(config: RunConfig) -> RunResult:
             static = static.to(device).float()
             label = label.to(device).float()
 
+            # For regression: label has shape (batch, timesteps) but all timesteps have same value
+            # Take first timestep to get (batch,) shape
+            if label.dim() > 1:
+                label = label[:, 0]
+
             optimizer.zero_grad()
             pred = model(x, static=static, time=times, sensor_mask=mask)
             loss = loss_fn(pred, label)
@@ -283,6 +290,11 @@ def train_eval_one(config: RunConfig) -> RunResult:
                 times = times.to(device).float()
                 static = static.to(device).float()
                 label = label.to(device).float()
+
+                # For regression: label has shape (batch, timesteps) but all timesteps have same value
+                # Take first timestep to get (batch,) shape
+                if label.dim() > 1:
+                    label = label[:, 0]
 
                 pred = model(x, static=static, time=times, sensor_mask=mask)
                 loss = loss_fn(pred, label)
@@ -331,6 +343,11 @@ def train_eval_one(config: RunConfig) -> RunResult:
             times = times.to(device).float()
             static = static.to(device).float()
             label = label.to(device).float()
+
+            # For regression: label has shape (batch, timesteps) but all timesteps have same value
+            # Take first timestep to get (batch,) shape
+            if label.dim() > 1:
+                label = label[:, 0]
 
             pred = model(x, static=static, time=times, sensor_mask=mask)
             loss = loss_fn(pred, label)
@@ -384,9 +401,11 @@ def parse_int_list(arg: str) -> List[int]:
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune SSL_BAT on regression tasks (e.g., Length of Stay)")
     parser.add_argument("--model_path", required=True, type=str, help="Path to pretrained checkpoint .ckpt")
-    parser.add_argument("--dataset", default="mimic_los", type=str,
-                        choices=["eicu_los", "miiv_los", "mimic_los", "mimic_los_regression", "p19_los"],
-                        help="Dataset name (e.g., mimic_los, mimic_los_regression)")
+    parser.add_argument("--dataset", default="mimic", type=str,
+                        choices=["eicu_los", "miiv_los", "mimic", "mimic_los_regression", "p19_los"],
+                        help="Dataset name (e.g., mimic, mimic_los_regression)")
+    parser.add_argument("--task", default="LengthOfStay", type=str,
+                        help="Task name for organizing preprocessed data (e.g., LengthOfStay, Sepsis)")
     parser.add_argument("--sizes", default="9506", type=str, help='e.g. "100,500,1000" or "100:9000:100"')
     parser.add_argument("--seeds", default="42", type=str, help='e.g. "42,84,126"')
     parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the regression head")
@@ -394,7 +413,7 @@ def main():
     parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate")
     parser.add_argument("--num_epochs", default=200, type=int)
     parser.add_argument("--subset_root", default="icu_benchmarks/data/preprocessed_data", type=str,
-                        help="Root path that contains {dataset}/{size}_{seed}/ parquet files (relative or absolute)")
+                        help="Root path that contains {task}/{dataset}/{size}_{seed}/ parquet files (relative or absolute)")
     parser.add_argument("--gin_config", default="", type=str,
                         help="Optional gin config file (not required for fine-tuning); leave empty to skip")
 
@@ -450,6 +469,7 @@ def main():
                 num_epochs=args.num_epochs,
                 subset_root=args.subset_root,
                 output_dir=str(output_dir),
+                task=args.task,
                 gin_config=args.gin_config or "",
             )
             try:
