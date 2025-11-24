@@ -5,11 +5,10 @@ import torch.nn.functional as F
 import torch.jit as jit
 from typing import List
 from icu_benchmarks.constants import RunMode
-from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper
+from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper, ImputationWrapper
 from icu_benchmarks.models.dl_models.bat import ForecastingHead
 
 
-# Helper functions
 def masked_mean_pooling(datatensor, mask):
     """
     Adapted from HuggingFace's Sentence Transformers:
@@ -83,7 +82,7 @@ class GRUDCell(jit.ScriptModule):
     def get_rdropout_mask_for_cell(
         self, inputs, dropout_prob: float, training: bool, num_units: int, count: int
     ):
-        if self.recurrent_dropout_masks[0].numel() == 1:
+        if not self.recurrent_dropout_masks[0].numel() == 1:
             return self.recurrent_dropout_masks
         else:
             return generate_masks(inputs, dropout_prob, training, num_units, count)
@@ -91,7 +90,7 @@ class GRUDCell(jit.ScriptModule):
     def get_mdropout_mask_for_cell(
         self, inputs, dropout_prob: float, training: bool, num_units: int, count: int
     ):
-        if self.feed_dropout_masks[0].numel() == 1:
+        if not self.feed_dropout_masks[0].numel() == 1:
             return self.feed_dropout_masks
         else:
             return generate_masks(inputs, dropout_prob, training, num_units, count)
@@ -116,6 +115,7 @@ class GRUDCell(jit.ScriptModule):
         masking_decay=None,
         dropout=0.0,
         recurrent_dropout=0.0,
+        use_bias=True,
     ):
         super().__init__()
         self.input_size = input_size
@@ -152,6 +152,8 @@ class GRUDCell(jit.ScriptModule):
         self.bias_r = nn.Parameter(torch.Tensor(hidden_size))
         self.bias_h = nn.Parameter(torch.Tensor(hidden_size))
 
+        self.use_bias = use_bias
+
         if self.use_input_decay:
             self.input_decay_kernel = nn.Parameter(torch.Tensor(input_size))
             if self.use_decay_bias:
@@ -184,12 +186,12 @@ class GRUDCell(jit.ScriptModule):
         nn.init.xavier_uniform_(self.recurrent_kernel_h)
         nn.init.xavier_uniform_(self.recurrent_kernel_r)
 
-        if self.use_input_decay is not None:
+        if self.use_input_decay:
             nn.init.zeros_(self.input_decay_kernel)
             if self.use_decay_bias:
                 nn.init.zeros_(self.input_decay_bias)
 
-        if self.use_hidden_decay is not None:
+        if self.use_hidden_decay:
             nn.init.zeros_(self.hidden_decay_kernel)
             if self.use_decay_bias:
                 nn.init.zeros_(self.hidden_decay_bias)
@@ -198,7 +200,7 @@ class GRUDCell(jit.ScriptModule):
             nn.init.xavier_uniform_(self.masking_kernel_z)
             nn.init.xavier_uniform_(self.masking_kernel_h)
             nn.init.xavier_uniform_(self.masking_kernel_r)
-            if self.masking_decay is not None:
+            if self.masking_decay:
                 nn.init.zeros_(self.masking_decay_kernel)
                 if self.use_decay_bias:
                     nn.init.zeros_(self.masking_decay_bias)
@@ -252,9 +254,6 @@ class GRUDCell(jit.ScriptModule):
             if self.use_decay_bias:
                 gamma_dm = gamma_dm + self.masking_decay_bias
             gamma_dm = self.masking_decay(gamma_dm)
-
-        # Don't manually move to device - PyTorch Lightning handles this
-        # input_m, input_x, x_keep_tm1, gamma_di are already on the correct device
 
         if self.use_input_decay:
             x_keep_t = torch.where(input_m, input_x, x_keep_tm1)
@@ -315,7 +314,7 @@ class GRUDCell(jit.ScriptModule):
             z_t += F.linear(m_z, self.masking_kernel_z)
             r_t += F.linear(m_r, self.masking_kernel_r)
             hh_t += F.linear(m_h, self.masking_kernel_h)
-        else:
+        if self.use_bias:
             z_t = z_t + self.bias_z
             r_t = r_t + self.bias_r
             hh_t = hh_t + self.bias_h
@@ -360,7 +359,6 @@ class GRUD(jit.ScriptModule):
             h_t, x_keep_t, s_prev_t = self.cell(
                 x_t, m_t, s_t, h_t, x_keep_t, s_prev_t
             )
-            # Don't move to CPU - keep on same device for PyTorch Lightning
             outputs.append(h_t)
         self.cell.reset_masks()
 
@@ -392,8 +390,9 @@ class RegressionHead(nn.Module):
 @gin.configurable
 class GRUDEncoder(nn.Module):
     """
-    GRUD-based encoder that follows the structure of BAT's encoder.
-    Processes time series data with GRU-D and produces a pooled representation.
+    GRUD-based encoder based on SEFT tensorflow implementation at:
+    https://github.com/BorgwardtLab/Set_Functions_for_Time_Series/blob/master/seft/models/gru_d.py
+
     """
 
     def __init__(
@@ -468,8 +467,6 @@ class GRUDEncoder(nn.Module):
             raise NotImplementedError(f"Obs strategy {self.obs_strategy} not found.")
 
         if self.use_static:
-            # Don't manually move to self.device - let PyTorch handle it
-            # The static_encoder will be on the correct device via PyTorch Lightning
             static_encoded = self.static_encoder(static)
         else:
             # Use the device of the static_encoder instead of self.device
@@ -643,3 +640,114 @@ class SSL_GRUD(SSLWrapper):
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
+
+
+@gin.configurable("GRUD")
+class GRUDImputation(ImputationWrapper):
+    """
+    Imputation model using GRU-D (Gated Recurrent Unit with Decay).
+
+    GRU-D naturally handles missing data through:
+    - Decay mechanisms for both input and hidden states
+    - Masking indicators that inform the model about missingness patterns
+    - Imputation strategies (forward fill, zero fill, or decay-based)
+    """
+
+    requires_backprop = True
+
+    def __init__(
+        self,
+        *args,
+        input_size,
+        hidden_size=64,
+        dropout=0.0,
+        recurrent_dropout=0.0,
+        x_imputation="zero",
+        input_decay="exp_relu",
+        hidden_decay="exp_relu",
+        activation="tanh",
+        recurrent_activation="hardsigmoid",
+        use_decay_bias=True,
+        feed_masking=True,
+        masking_decay=None,
+        **kwargs
+    ):
+        super().__init__(
+            *args,
+            input_size=input_size,
+            hidden_size=hidden_size,
+            dropout=dropout,
+            recurrent_dropout=recurrent_dropout,
+            x_imputation=x_imputation,
+            input_decay=input_decay,
+            hidden_decay=hidden_decay,
+            activation=activation,
+            recurrent_activation=recurrent_activation,
+            use_decay_bias=use_decay_bias,
+            feed_masking=feed_masking,
+            masking_decay=masking_decay,
+            **kwargs
+        )
+
+        self.input_size = input_size
+        self.n_features = input_size[2]  # (batch, time, features)
+        self.hidden_size = hidden_size
+
+        # GRUD core
+        self.rnn = GRUD(
+            input_size=self.n_features,
+            hidden_size=hidden_size,
+            device=self.device,
+            dropout=dropout,
+            recurrent_dropout=recurrent_dropout,
+            x_imputation=x_imputation,
+            input_decay=input_decay,
+            hidden_decay=hidden_decay,
+            activation=activation,
+            recurrent_activation=recurrent_activation,
+            use_decay_bias=use_decay_bias,
+            feed_masking=feed_masking,
+            masking_decay=masking_decay,
+        )
+
+        # Output layer to predict imputed values
+        self.imputation_layer = nn.Linear(hidden_size, self.n_features)
+
+    def forward(self, amputated, amputation_mask):
+        """
+        Forward pass for imputation.
+
+        Args:
+            amputated: Tensor of shape (batch, time, features) with missing values
+            amputation_mask: Boolean tensor of shape (batch, time, features)
+                           where True indicates missing values
+
+        Returns:
+            Tensor of shape (batch, time, features) with imputed values
+        """
+        batch_size, seq_len, n_features = amputated.shape
+
+        # Create observation mask (inverse of amputation mask)
+        # GRUD expects mask where True = observed, False = missing
+        observation_mask = ~amputation_mask.bool()
+
+        # Create time tensor (assuming uniform time steps)
+        # For real data, this should come from actual timestamps
+        time = torch.arange(seq_len, device=amputated.device, dtype=amputated.dtype)
+        time = time.unsqueeze(0).expand(batch_size, -1)
+
+        # Run GRUD to get hidden states
+        # GRUD.forward expects: (values, mask, time)
+        hidden_states = self.rnn(
+            values=amputated,
+            mask=observation_mask,
+            time=time
+        )  # Returns (batch, time, hidden_size)
+
+        # Project hidden states to imputed values
+        imputed = self.imputation_layer(hidden_states)
+
+        # Only replace missing values, keep observed values
+        output = torch.where(amputation_mask, imputed, amputated)
+
+        return output

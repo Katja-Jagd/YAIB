@@ -10,7 +10,6 @@ from copy import deepcopy
 from typing import Dict, List, Tuple
 
 # --- Third-party / project imports ---
-import gin
 import torch
 import random
 import numpy as np
@@ -42,40 +41,6 @@ VARS_DICT = {
 # -------------------------
 # Utilities
 # -------------------------
-def parse_gin_config(gin_path: str):
-    """Parse a gin config and make relative `include` paths work."""
-    gin.clear_config()
-    p = Path(gin_path).resolve()
-
-    # Likely roots
-    tasks_dir   = p.parent                           # .../configs/tasks
-    configs_dir = tasks_dir.parent                   # .../configs
-    repo_root   = configs_dir.parent                 # .../YAIB
-
-    # Add search roots so includes like "configs/.../X.gin" resolve
-    gin.add_config_file_search_path(str(tasks_dir))
-    gin.add_config_file_search_path(str(configs_dir))
-    gin.add_config_file_search_path(str(repo_root))              # crucial for "configs/..."
-    gin.add_config_file_search_path(str(repo_root / "configs"))  # extra safety
-    gin.add_config_file_search_path(str(repo_root / "configs" / "tasks"))
-
-    # (Optional) also set CWD to repo root to help any other relative references
-    try:
-        os.chdir(str(repo_root))
-    except Exception:
-        pass
-
-    # Helpful sanity check (won't crash if missing)
-    include_probe = repo_root / "configs" / "tasks" / "common" / "Imports.gin"
-    if not include_probe.exists():
-        print(f"[WARN] Could not find expected include at: {include_probe}")
-        print("[WARN] Current gin search paths:")
-        for sp in gin.config._CONFIG_DIR:  # type: ignore[attr-defined]
-            print("       -", sp)
-
-    gin.parse_config_file(str(p))
-
-
 def set_seeds(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -158,8 +123,7 @@ class RunConfig:
     num_epochs: int
     subset_root: str
     output_dir: str
-    task: str = "LengthOfStay"  # task name for organizing data
-    gin_config: str = ""  # optional; leave empty to skip
+    task: str = "LengthOfStay"
 
 
 @dataclass
@@ -179,10 +143,6 @@ class RunResult:
 
 
 def train_eval_one(config: RunConfig) -> RunResult:
-    # optional gin
-    if config.gin_config:
-        parse_gin_config(config.gin_config)
-
     # fixed seed for training procedure
     set_seeds(42)
 
@@ -307,7 +267,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
         val_mae = mean_absolute_error(all_val_labels, all_val_preds)
 
         print(
-            f"Epoch {epoch+1}: "
+            f"\nEpoch {epoch+1}: "
             f"train_loss={avg_train_loss:.4f} mse={train_mse:.4f} mae={train_mae:.4f} | "
             f"val_loss={avg_val_loss:.4f} mse={val_mse:.4f} mae={val_mae:.4f}"
         )
@@ -414,8 +374,6 @@ def main():
     parser.add_argument("--num_epochs", default=200, type=int)
     parser.add_argument("--subset_root", default="icu_benchmarks/data/preprocessed_data", type=str,
                         help="Root path that contains {task}/{dataset}/{size}_{seed}/ parquet files (relative or absolute)")
-    parser.add_argument("--gin_config", default="", type=str,
-                        help="Optional gin config file (not required for fine-tuning); leave empty to skip")
 
     args = parser.parse_args()
 
@@ -440,7 +398,6 @@ def main():
         "lr": args.lr,
         "num_epochs": args.num_epochs,
         "subset_root": args.subset_root,
-        "gin_config": args.gin_config,
     }, sort_keys=True).encode()).hexdigest()[:10]
 
     per_run_log = output_dir / f"runs_{sweep_id}.jsonl"
@@ -470,7 +427,6 @@ def main():
                 subset_root=args.subset_root,
                 output_dir=str(output_dir),
                 task=args.task,
-                gin_config=args.gin_config or "",
             )
             try:
                 result = train_eval_one(run_cfg)
