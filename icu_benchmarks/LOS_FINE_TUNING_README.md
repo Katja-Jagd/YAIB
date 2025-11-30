@@ -41,7 +41,7 @@ for size in 100 500 1000 2000 3000 5000; do
       -n mimic_los \
       -t Regression \
       -tn LengthOfStay \
-      -m model_of_choices \
+      -m model_of_choice \
       -gc \
       -lc \
       -s 2222 \

@@ -23,7 +23,12 @@ from torch.utils.data import DataLoader
 # ICU Benchmarks (your repo)
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.loader import BATPolarsDataset
-from icu_benchmarks.models.dl_models.bat import SSL_BAT, EncoderPrediction, BinaryClassificationHead
+from icu_benchmarks.models.dl_models.bat import (
+    SSL_BAT,
+    EncoderPrediction,
+    BinaryClassificationHead,
+    TimeseriesClassificationHead,
+)
 from icu_benchmarks.cross_validation import execute_repeated_cv
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.run import get_mode
@@ -132,27 +137,79 @@ def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]]) -> Tuple[BATPolarsD
     return train_set, val_set, test_set
 
 
-def build_model_from_ckpt(ckpt_path: Path) -> EncoderPrediction:
+def build_model_from_ckpt(ckpt_path: Path, task: str = "Mortality24") -> EncoderPrediction:
+    """
+    Build model from checkpoint with task-appropriate prediction head.
+
+    Args:
+        ckpt_path: Path to checkpoint file
+        task: Task name (Mortality24, Sepsis, AKI, etc.)
+
+    Returns:
+        EncoderPrediction model with appropriate head
+    """
+    # Define which tasks require timestep-level predictions
+    TIMESTEP_TASKS = {"Sepsis"}  # Add others as needed: "AKI" if it's also timestep-level
+
     ckpt = torch.load(ckpt_path, map_location="cpu")
     hparams = ckpt.get("hyper_parameters", {})
 
-    # Instantiate SSL_BAT
-    model = SSL_BAT(**hparams)
-
-    # Load only encoder weights
+    # Load encoder state dict
     encoder_state_dict = {
         k.replace("model.encoder_class.", ""): v
         for k, v in ckpt["state_dict"].items()
         if k.startswith("model.encoder_class.")
     }
-    model.model.encoder_class.load_state_dict(encoder_state_dict)
 
-    # Build classification wrapper with pretrained encoder
-    classification_model = EncoderPrediction(
-        encoder_class=model.model.encoder_class,
-        prediction_head=BinaryClassificationHead,
-        prediction_head_kwargs={"num_classes": 2},
-    )
+    # For timestep-level tasks, create autoregressive encoder
+    if task in TIMESTEP_TASKS:
+        print(f"[INFO] Creating autoregressive encoder for timestep-level task: {task}")
+
+        # Import the autoregressive encoder
+        from icu_benchmarks.models.dl_models.bat import AutoregressiveEncoderCrossParallel
+
+        # Extract dimensions from hparams
+        sensors_count = hparams["input_size"][1]
+        max_timepoint_count = hparams["input_size"][2]
+        static_count = hparams.get("static_count", 4)
+
+        # Create autoregressive encoder with same architecture params
+        encoder = AutoregressiveEncoderCrossParallel(
+            device="cpu",
+            value_embed_size=hparams["value_embed_size"],
+            layers=hparams["layers"],
+            heads=hparams["heads"],
+            dropout=hparams["dropout"],
+            attn_dropout=hparams["attn_dropout"],
+            use_mask=hparams["use_mask"],
+            sensors_count=sensors_count,
+            max_timepoint_count=max_timepoint_count,
+            static_count=static_count,
+        )
+
+        # Try to load compatible weights from pretrained encoder
+        missing, unexpected = encoder.load_state_dict(encoder_state_dict, strict=False)
+        print(f"[INFO] Loaded encoder weights: {len(encoder_state_dict) - len(missing)} matched, {len(missing)} missing")
+
+        # Timestep-level prediction (e.g., Sepsis)
+        classification_model = EncoderPrediction(
+            encoder_class=encoder,
+            prediction_head=TimeseriesClassificationHead,
+            prediction_head_kwargs={"num_classes": 2},
+        )
+    else:
+        # For patient-level tasks, use the original SSL_BAT encoder
+        model = SSL_BAT(**hparams)
+        model.model.encoder_class.load_state_dict(encoder_state_dict)
+        print(f"[INFO] Loaded pretrained encoder weights")
+
+        # Patient-level prediction (e.g., Mortality24)
+        classification_model = EncoderPrediction(
+            encoder_class=model.model.encoder_class,
+            prediction_head=BinaryClassificationHead,
+            prediction_head_kwargs={"num_classes": 2},
+        )
+
     return classification_model
 
 
@@ -166,8 +223,10 @@ class RunConfig:
     batch_size: int
     lr: float
     num_epochs: int
+    patience: int
     subset_root: str
     output_dir: str
+    task: str = "Mortality24"  # Options: Mortality24, Sepsis, etc.
 
 
 @dataclass
@@ -196,6 +255,17 @@ def train_eval_one(config: RunConfig) -> RunResult:
     # datasets & loaders
     train_set, val_set, test_set = build_datasets(data)
 
+    print("\n" + "="*80)
+    print("DATASET INFORMATION")
+    print("="*80)
+    print(f"Training set size: {len(train_set)}")
+    print(f"Validation set size: {len(val_set)}")
+    print(f"Test set size: {len(test_set)}")
+    print(f"Task: {config.task}")
+    print(f"Is timestep task: {config.task in {'Sepsis'}}")
+    print("="*80 + "\n")
+    input("Press Enter to continue...")
+
     g = torch.Generator().manual_seed(42)
     train_loader = DataLoader(
         train_set,
@@ -221,8 +291,19 @@ def train_eval_one(config: RunConfig) -> RunResult:
     # device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Determine if this is a timestep-level task
+    TIMESTEP_TASKS = {"Sepsis"}
+    is_timestep_task = config.task in TIMESTEP_TASKS
+
     # model
-    model = build_model_from_ckpt(Path(config.model_path))
+    model = build_model_from_ckpt(Path(config.model_path), task=config.task)
+
+    print(f"\n[DEBUG] Model built:")
+    print(f"  Encoder type: {type(model.encoder_class).__name__}")
+    print(f"  Is autoregressive: {model.is_autoregressive}")
+    print(f"  Prediction head type: {type(model.head).__name__}")
+    print()
+
     if config.fine_tune_head:
         # freeze all, unfreeze head
         for p in model.parameters():
@@ -238,7 +319,8 @@ def train_eval_one(config: RunConfig) -> RunResult:
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
     loss_fn = torch.nn.CrossEntropyLoss()
 
-    patience = 3
+    patience = config.patience
+    print(f"\n[INFO] Early stopping patience: {patience} epochs")
     best_val_auprc = 0.0
     epochs_without_improvement = 0
     best_state = None
@@ -252,59 +334,257 @@ def train_eval_one(config: RunConfig) -> RunResult:
         all_train_probs: List[float] = []
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs} (train)")
+        batch_idx = 0
         for batch in pbar:
-            x, mask, label, times, static, *_ = batch
+            batch_idx += 1
+            x, mask, label, times, static, delta, obs_mask = batch
             x = x.to(device).float()
             mask = mask.to(device).float()
             times = times.to(device).float()
             static = static.to(device).float()
             label = label.to(device).long()
+            obs_mask = obs_mask.to(device).bool()
 
-            # Convert timestep-level labels to patient-level (for sequential tasks like sepsis)
-            # If label is 2D [batch, timesteps], reduce to 1D [batch] by taking max
-            if label.dim() > 1:
-                label = label.max(dim=1)[0]  # 1 if sepsis occurs at any timestep, 0 otherwise
+            # Print detailed info for first batch of first epoch
+            if epoch == 0 and batch_idx == 1:
+                print("\n" + "="*80)
+                print("FIRST BATCH DATA SHAPES (TRAINING)")
+                print("="*80)
+                print(f"Time series data (x): {x.shape}")
+                print(f"Sensor mask: {mask.shape}")
+                print(f"Labels: {label.shape}")
+                print(f"Times: {times.shape}")
+                print(f"Static features: {static.shape}")
+                print(f"Observation mask: {obs_mask.shape}")
+                print("\nSTATIC FEATURES SAMPLE (first patient):")
+                print(f"  Values: {static[0].cpu().numpy()}")
+                print("\nTIME SERIES SAMPLE (first patient, first 5 timesteps):")
+                print(f"  Values shape: {x[0, :5].shape}")
+                print(f"  Times: {times[0, :5].cpu().numpy()}")
+                print(f"  Obs mask: {obs_mask[0, :5].cpu().numpy()}")
+                print("\nLABEL STATISTICS:")
+                if label.dim() > 1:
+                    print(f"  Labels shape: {label.shape}")
+                    print(f"  First patient labels (first 10 timesteps): {label[0, :10].cpu().numpy()}")
+                    print(f"  Valid timesteps for first patient: {obs_mask[0].sum().item()}")
+                    print(f"  Positive labels in batch: {label[obs_mask].sum().item()} / {obs_mask.sum().item()}")
+                else:
+                    print(f"  Labels shape: {label.shape}")
+                    print(f"  First 5 labels: {label[:5].cpu().numpy()}")
+                    print(f"  Positive labels in batch: {label.sum().item()} / {len(label)}")
+                print("="*80 + "\n")
+                input("Press Enter to continue...")
 
             optimizer.zero_grad()
-            logits = model(x, static=static, time=times, sensor_mask=mask)
-            loss = loss_fn(logits, label)
+            try:
+                logits = model(x, static=static, time=times, sensor_mask=mask)
+            except Exception as e:
+                print(f"\n[ERROR] Model forward pass failed: {e}")
+                print(f"Input shapes: x={x.shape}, static={static.shape}, times={times.shape}, mask={mask.shape}")
+                raise
+
+            # Handle label format and compute loss based on task type
+            if is_timestep_task:
+                # Timestep-level prediction (e.g., Sepsis)
+                # logits: (B, T, num_classes), label: (B, T), obs_mask: (B, T)
+                B, T, C = logits.shape
+
+                # Reshape for cross-entropy: (B*T, num_classes) and (B*T,)
+                logits_flat = logits.reshape(B * T, C)
+                label_flat = label.reshape(B * T)
+                obs_mask_flat = obs_mask.reshape(B * T)
+
+                # Only compute loss on valid (non-padded) positions
+                if obs_mask_flat.sum() > 0:
+                    loss = loss_fn(logits_flat[obs_mask_flat], label_flat[obs_mask_flat])
+                else:
+                    loss = torch.tensor(0.0, device=device, requires_grad=True)
+
+                # For metrics: collect all valid timestep predictions and labels
+                probs = F.softmax(logits, dim=-1)[:, :, 1]  # (B, T) - prob of class 1
+                valid_probs = probs[obs_mask]
+                valid_labels = label[obs_mask]
+
+                # Print predictions vs labels for first batch of first epoch
+                if epoch == 0 and batch_idx == 1:
+                    print("\n" + "="*80)
+                    print("MODEL PREDICTIONS VS LABELS (FIRST BATCH)")
+                    print("="*80)
+                    print(f"Logits shape: {logits.shape}")
+                    print(f"Probabilities shape: {probs.shape}")
+
+                    print(f"\nBATCH-LEVEL STATISTICS:")
+                    print(f"  Total valid timesteps: {obs_mask_flat.sum().item()}")
+                    print(f"  Positive labels (sepsis): {label_flat[obs_mask_flat].sum().item()}")
+                    print(f"  Negative labels (no sepsis): {(label_flat[obs_mask_flat] == 0).sum().item()}")
+                    print(f"  Mean predicted probability: {valid_probs.mean().item():.4f}")
+                    print(f"  Min predicted probability: {valid_probs.min().item():.4f}")
+                    print(f"  Max predicted probability: {valid_probs.max().item():.4f}")
+                    print(f"  Loss: {loss.item():.4f}")
+
+                    # Find patients with positive and negative labels
+                    # For each patient, check if they have any positive labels
+                    print(f"\nSAMPLE PATIENTS WITH PREDICTIONS:")
+
+                    positive_patients = []
+                    negative_patients = []
+
+                    for b in range(B):
+                        patient_labels = label[b][obs_mask[b]]
+                        patient_probs = probs[b][obs_mask[b]]
+
+                        if len(patient_labels) > 0:
+                            has_positive = (patient_labels == 1).any().item()
+                            if has_positive and len(positive_patients) < 5:
+                                positive_patients.append((b, patient_labels, patient_probs))
+                            elif not has_positive and len(negative_patients) < 5:
+                                negative_patients.append((b, patient_labels, patient_probs))
+
+                    print(f"\nPOSITIVE PATIENTS (with sepsis labels):")
+                    for i, (patient_idx, patient_labels, patient_probs) in enumerate(positive_patients):
+                        print(f"\n  Patient {patient_idx} (from batch):")
+                        labels_np = patient_labels.detach().cpu().numpy()
+                        probs_np = patient_probs.detach().cpu().numpy()
+                        print(f"    Labels:       {labels_np}")
+                        print(f"    Predictions:  {np.round(probs_np, 4)}")
+                        n_correct = ((probs_np > 0.5) == labels_np).sum()
+                        print(f"    Accuracy: {n_correct}/{len(labels_np)} ({100*n_correct/len(labels_np):.1f}%)")
+
+                    if len(positive_patients) == 0:
+                        print("  No patients with positive labels in this batch")
+
+                    print(f"\nNEGATIVE PATIENTS (no sepsis labels):")
+                    for i, (patient_idx, patient_labels, patient_probs) in enumerate(negative_patients):
+                        print(f"\n  Patient {patient_idx} (from batch):")
+                        labels_np = patient_labels.detach().cpu().numpy()
+                        probs_np = patient_probs.detach().cpu().numpy()
+                        print(f"    Labels:       {labels_np}")
+                        print(f"    Predictions:  {np.round(probs_np, 4)}")
+                        n_correct = ((probs_np > 0.5) == labels_np).sum()
+                        print(f"    Accuracy: {n_correct}/{len(labels_np)} ({100*n_correct/len(labels_np):.1f}%)")
+
+                    if len(negative_patients) == 0:
+                        print("  No patients with all negative labels in this batch")
+
+                    print("="*80 + "\n")
+                    input("Press Enter to continue...")
+
+                all_train_labels.extend(valid_labels.detach().cpu().numpy())
+                all_train_probs.extend(valid_probs.detach().cpu().numpy())
+            else:
+                # Patient-level prediction (e.g., Mortality24)
+                # logits: (B, num_classes), label: (B,) or (B, T)
+                if label.dim() > 1:
+                    # Take last valid timestep for patient-level tasks
+                    label = label[:, -1]
+
+                loss = loss_fn(logits, label)
+                probs = F.softmax(logits, dim=1)[:, 1]
+                all_train_labels.extend(label.detach().cpu().numpy())
+                all_train_probs.extend(probs.detach().cpu().numpy())
+
             loss.backward()
             optimizer.step()
 
             total_train_loss += loss.item()
-            probs = F.softmax(logits, dim=1)[:, 1]
-            all_train_labels.extend(label.detach().cpu().numpy())
-            all_train_probs.extend(probs.detach().cpu().numpy())
             pbar.set_postfix(loss=loss.item())
 
         avg_train_loss = total_train_loss / max(1, len(train_loader))
         train_auroc = roc_auc_score(all_train_labels, all_train_probs)
         train_auprc = average_precision_score(all_train_labels, all_train_probs)
 
+        # Print training metrics summary
+        if epoch == 0:
+            print("\n" + "="*80)
+            print(f"EPOCH {epoch+1} TRAINING METRICS SUMMARY")
+            print("="*80)
+            print(f"Total training samples (valid timesteps): {len(all_train_labels)}")
+            print(f"Positive labels: {sum(all_train_labels)}")
+            print(f"Class balance: {sum(all_train_labels)/len(all_train_labels):.4f}")
+            print(f"Average loss: {avg_train_loss:.4f}")
+            print(f"AUROC: {train_auroc:.4f}")
+            print(f"AUPRC: {train_auprc:.4f}")
+            print("="*80 + "\n")
+            input("Press Enter to continue...")
+
         # VAL
         model.eval()
         total_val_loss = 0.0
         all_val_labels: List[int] = []
         all_val_probs: List[float] = []
+
+        # Store first batch info for epoch 0 checkpoint
+        first_val_batch_data = None
+
+        # Store patient-level data for validation checkpoints every 5 epochs
+        val_patient_data = [] if epoch % 5 == 0 else None
+
         with torch.no_grad():
+            val_batch_idx = 0
             for batch in val_loader:
-                x, mask, label, times, static, *_ = batch
+                val_batch_idx += 1
+                x, mask, label, times, static, delta, obs_mask = batch
                 x = x.to(device).float()
                 mask = mask.to(device).float()
                 times = times.to(device).float()
                 static = static.to(device).float()
                 label = label.to(device).long()
-
-                # Convert timestep-level labels to patient-level
-                if label.dim() > 1:
-                    label = label.max(dim=1)[0]
+                obs_mask = obs_mask.to(device).bool()
 
                 logits = model(x, static=static, time=times, sensor_mask=mask)
-                loss = loss_fn(logits, label)
+
+                # Save first validation batch for inspection after epoch 0
+                if epoch == 0 and val_batch_idx == 1:
+                    first_val_batch_data = {
+                        'logits': logits.clone(),
+                        'label': label.clone(),
+                        'obs_mask': obs_mask.clone(),
+                        'x': x.clone(),
+                        'static': static.clone()
+                    }
+
+                # Handle label format and compute loss based on task type
+                if is_timestep_task:
+                    # Timestep-level prediction
+                    B, T, C = logits.shape
+                    logits_flat = logits.reshape(B * T, C)
+                    label_flat = label.reshape(B * T)
+                    obs_mask_flat = obs_mask.reshape(B * T)
+
+                    if obs_mask_flat.sum() > 0:
+                        loss = loss_fn(logits_flat[obs_mask_flat], label_flat[obs_mask_flat])
+                    else:
+                        loss = torch.tensor(0.0, device=device)
+
+                    probs = F.softmax(logits, dim=-1)[:, :, 1]
+                    valid_probs = probs[obs_mask]
+                    valid_labels = label[obs_mask]
+                    all_val_labels.extend(valid_labels.cpu().numpy())
+                    all_val_probs.extend(valid_probs.cpu().numpy())
+
+                    # Store patient-level data for checkpoint every 5 epochs
+                    if val_patient_data is not None:
+                        for b in range(B):
+                            patient_labels = label[b][obs_mask[b]]
+                            patient_probs = probs[b][obs_mask[b]]
+                            if len(patient_labels) > 0:
+                                has_positive = (patient_labels == 1).any().item()
+                                val_patient_data.append({
+                                    'labels': patient_labels.cpu(),
+                                    'probs': patient_probs.cpu(),
+                                    'has_positive': has_positive
+                                })
+                else:
+                    # Patient-level prediction
+                    if label.dim() > 1:
+                        label = label[:, -1]
+
+                    loss = loss_fn(logits, label)
+                    probs = F.softmax(logits, dim=1)[:, 1]
+                    all_val_labels.extend(label.cpu().numpy())
+                    all_val_probs.extend(probs.cpu().numpy())
+
                 total_val_loss += loss.item()
-                probs = F.softmax(logits, dim=1)[:, 1]
-                all_val_labels.extend(label.cpu().numpy())
-                all_val_probs.extend(probs.cpu().numpy())
 
         avg_val_loss = total_val_loss / max(1, len(val_loader))
         val_auroc = roc_auc_score(all_val_labels, all_val_probs)
@@ -315,6 +595,117 @@ def train_eval_one(config: RunConfig) -> RunResult:
             f"train_loss={avg_train_loss:.4f} auroc={train_auroc:.4f} auprc={train_auprc:.4f} | "
             f"val_loss={avg_val_loss:.4f} auroc={val_auroc:.4f} auprc={val_auprc:.4f}"
         )
+
+        # Print detailed output shapes and values for first sample after epoch 0
+        if epoch == 0 and first_val_batch_data is not None:
+            print("\n" + "="*80)
+            print("FIRST SAMPLE PREDICTION DETAILS (AFTER EPOCH 1)")
+            print("="*80)
+
+            logits_first = first_val_batch_data['logits']
+            label_first = first_val_batch_data['label']
+            obs_mask_first = first_val_batch_data['obs_mask']
+
+            print(f"\nOUTPUT SHAPES:")
+            print(f"  Logits: {logits_first.shape}")
+            print(f"  Labels: {label_first.shape}")
+            print(f"  Observation mask: {obs_mask_first.shape}")
+
+            if is_timestep_task:
+                # Timestep-level task
+                print(f"\nFIRST SAMPLE (patient 0):")
+                probs_first = F.softmax(logits_first, dim=-1)[0, :, 1]  # (T,) - prob of class 1
+                labels_first = label_first[0]  # (T,)
+                obs_mask_first_sample = obs_mask_first[0]  # (T,)
+
+                # Show only valid timesteps
+                valid_mask = obs_mask_first_sample.cpu().numpy()
+                n_valid = valid_mask.sum()
+
+                print(f"  Total timesteps: {len(labels_first)}")
+                print(f"  Valid timesteps: {n_valid}")
+
+                # Show first 20 valid timesteps
+                valid_timestep_indices = np.where(valid_mask)[0]
+                n_show = min(20, len(valid_timestep_indices))
+
+                print(f"\n  First {n_show} valid timesteps:")
+                print(f"  {'Timestep':<10} {'Label':<8} {'Prob(Sepsis)':<15} {'Logit[0]':<12} {'Logit[1]':<12}")
+                print(f"  {'-'*10} {'-'*8} {'-'*15} {'-'*12} {'-'*12}")
+
+                for i in range(n_show):
+                    t_idx = valid_timestep_indices[i]
+                    label_val = labels_first[t_idx].item()
+                    prob_val = probs_first[t_idx].item()
+                    logit_0 = logits_first[0, t_idx, 0].item()
+                    logit_1 = logits_first[0, t_idx, 1].item()
+                    marker = "✓" if (prob_val > 0.5 and label_val == 1) or (prob_val <= 0.5 and label_val == 0) else "✗"
+                    print(f"  {t_idx:<10} {label_val:<8} {prob_val:<15.4f} {logit_0:<12.4f} {logit_1:<12.4f} {marker}")
+
+            else:
+                # Patient-level task
+                print(f"\nFIRST SAMPLE (patient 0):")
+                probs_first = F.softmax(logits_first, dim=-1)[0]
+                label_first_val = label_first[0]
+
+                print(f"  Label: {label_first_val.item()}")
+                print(f"  Logits: {logits_first[0].cpu().numpy()}")
+                print(f"  Probabilities: {probs_first.cpu().numpy()}")
+                print(f"  Predicted class: {1 if probs_first[1] > 0.5 else 0}")
+
+            print("="*80 + "\n")
+            input("Press Enter to continue...")
+
+        # Print validation prediction details every 5 epochs
+        if epoch % 5 == 0 and val_patient_data is not None:
+            print("\n" + "-"*80)
+            print(f"VALIDATION PREDICTIONS SAMPLE (Epoch {epoch+1})")
+            print("-"*80)
+            print(f"Total validation samples: {len(all_val_labels)}")
+            print(f"Positive labels (sepsis): {sum(all_val_labels)}")
+            print(f"Negative labels (no sepsis): {len(all_val_labels) - sum(all_val_labels)}")
+            print(f"Prediction statistics:")
+            print(f"  Mean probability: {np.mean(all_val_probs):.4f}")
+            print(f"  Std probability: {np.std(all_val_probs):.4f}")
+            print(f"  Min probability: {np.min(all_val_probs):.4f}")
+            print(f"  Max probability: {np.max(all_val_probs):.4f}")
+
+            # Separate positive and negative patients
+            positive_patients = [p for p in val_patient_data if p['has_positive']]
+            negative_patients = [p for p in val_patient_data if not p['has_positive']]
+
+            print(f"\nPOSITIVE PATIENTS (with sepsis labels):")
+            n_show_pos = min(5, len(positive_patients))
+            for i in range(n_show_pos):
+                patient = positive_patients[i]
+                print(f"\n  Patient {i+1}:")
+                labels_np = patient['labels'].numpy()
+                probs_np = patient['probs'].numpy()
+                print(f"    Labels:       {labels_np}")
+                print(f"    Predictions:  {np.round(probs_np, 4)}")
+                n_correct = ((probs_np > 0.5) == labels_np).sum()
+                print(f"    Accuracy: {n_correct}/{len(labels_np)} ({100*n_correct/len(labels_np):.1f}%)")
+
+            if n_show_pos == 0:
+                print("  No patients with positive labels in validation set")
+
+            print(f"\nNEGATIVE PATIENTS (no sepsis labels):")
+            n_show_neg = min(5, len(negative_patients))
+            for i in range(n_show_neg):
+                patient = negative_patients[i]
+                print(f"\n  Patient {i+1}:")
+                labels_np = patient['labels'].numpy()
+                probs_np = patient['probs'].numpy()
+                print(f"    Labels:       {labels_np}")
+                print(f"    Predictions:  {np.round(probs_np, 4)}")
+                n_correct = ((probs_np > 0.5) == labels_np).sum()
+                print(f"    Accuracy: {n_correct}/{len(labels_np)} ({100*n_correct/len(labels_np):.1f}%)")
+
+            if n_show_neg == 0:
+                print("  No patients with all negative labels in validation set")
+
+            print("-"*80 + "\n")
+            input("Press Enter to continue...")
 
         scheduler.step()
 
@@ -341,24 +732,45 @@ def train_eval_one(config: RunConfig) -> RunResult:
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
         for batch in pbar:
-            x, mask, label, times, static, *_ = batch
+            x, mask, label, times, static, delta, obs_mask = batch
             x = x.to(device).float()
             mask = mask.to(device).float()
             times = times.to(device).float()
             static = static.to(device).float()
             label = label.to(device).long()
-
-            # Convert timestep-level labels to patient-level
-            if label.dim() > 1:
-                label = label.max(dim=1)[0]
+            obs_mask = obs_mask.to(device).bool()
 
             logits = model(x, static=static, time=times, sensor_mask=mask)
-            loss = loss_fn(logits, label)
-            total_test_loss += loss.item()
 
-            probs = F.softmax(logits, dim=1)[:, 1]
-            all_test_labels.extend(label.cpu().numpy())
-            all_test_probs.extend(probs.cpu().numpy())
+            # Handle label format and compute loss based on task type
+            if is_timestep_task:
+                # Timestep-level prediction
+                B, T, C = logits.shape
+                logits_flat = logits.reshape(B * T, C)
+                label_flat = label.reshape(B * T)
+                obs_mask_flat = obs_mask.reshape(B * T)
+
+                if obs_mask_flat.sum() > 0:
+                    loss = loss_fn(logits_flat[obs_mask_flat], label_flat[obs_mask_flat])
+                else:
+                    loss = torch.tensor(0.0, device=device)
+
+                probs = F.softmax(logits, dim=-1)[:, :, 1]
+                valid_probs = probs[obs_mask]
+                valid_labels = label[obs_mask]
+                all_test_labels.extend(valid_labels.cpu().numpy())
+                all_test_probs.extend(valid_probs.cpu().numpy())
+            else:
+                # Patient-level prediction
+                if label.dim() > 1:
+                    label = label[:, -1]
+
+                loss = loss_fn(logits, label)
+                probs = F.softmax(logits, dim=1)[:, 1]
+                all_test_labels.extend(label.cpu().numpy())
+                all_test_probs.extend(probs.cpu().numpy())
+
+            total_test_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
 
     avg_test_loss = total_test_loss / max(1, len(test_loader))
@@ -370,6 +782,46 @@ def train_eval_one(config: RunConfig) -> RunResult:
         f"(dataset={config.dataset}, size={config.size}, seed={config.seed}): "
         f"loss={avg_test_loss:.4f} auroc={test_auroc:.4f} auprc={test_auprc:.4f}"
     )
+
+    print("\n" + "="*80)
+    print("FINAL TEST PREDICTIONS SAMPLE")
+    print("="*80)
+    print(f"Total test samples: {len(all_test_labels)}")
+    print(f"Positive labels (sepsis): {sum(all_test_labels)}")
+    print(f"Negative labels (no sepsis): {len(all_test_labels) - sum(all_test_labels)}")
+    print(f"Prediction statistics:")
+    print(f"  Mean probability: {np.mean(all_test_probs):.4f}")
+    print(f"  Std probability: {np.std(all_test_probs):.4f}")
+    print(f"  Min probability: {np.min(all_test_probs):.4f}")
+    print(f"  Max probability: {np.max(all_test_probs):.4f}")
+
+    # Separate positive and negative examples
+    test_labels_arr = np.array(all_test_labels)
+    test_probs_arr = np.array(all_test_probs)
+    pos_indices = np.where(test_labels_arr == 1)[0]
+    neg_indices = np.where(test_labels_arr == 0)[0]
+
+    print(f"\nPOSITIVE EXAMPLES (SEPSIS):")
+    if len(pos_indices) > 0:
+        n_show = min(15, len(pos_indices))
+        for i in range(n_show):
+            idx = pos_indices[i]
+            marker = "✓" if test_probs_arr[idx] > 0.5 else "✗"
+            print(f"  {marker} Label: 1, Pred prob: {test_probs_arr[idx]:.4f}")
+    else:
+        print("  No positive labels in test set")
+
+    print(f"\nNEGATIVE EXAMPLES (NO SEPSIS):")
+    if len(neg_indices) > 0:
+        n_show = min(15, len(neg_indices))
+        step = len(neg_indices) // n_show if n_show > 0 else 1
+        for i in range(n_show):
+            idx = neg_indices[i * step]
+            marker = "✓" if test_probs_arr[idx] <= 0.5 else "✗"
+            print(f"  {marker} Label: 0, Pred prob: {test_probs_arr[idx]:.4f}")
+
+    print("="*80 + "\n")
+    input("Press Enter to continue...")
 
     return RunResult(
         dataset=config.dataset,
@@ -400,13 +852,18 @@ def parse_int_list(arg: str) -> List[int]:
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune SSL_BAT on ICU subsets and aggregate results.")
     parser.add_argument("--model_path", required=True, type=str, help="Path to pretrained checkpoint .ckpt")
-    parser.add_argument("--dataset", default="mimic", type=str, choices=["eicu", "miiv", "mimic"])
+    parser.add_argument("--dataset", default="mimic", type=str, help="Dataset name (eicu, miiv, mimic, or custom)")
+    parser.add_argument("--task", default="Mortality24", type=str,
+                        choices=["Mortality24", "Sepsis", "AKI", "Mortality"],
+                        help="Task name: determines prediction head and label handling")
     parser.add_argument("--sizes", default="9506", type=str, help='e.g. "100,500,1000" or "100:9000:100"')
     parser.add_argument("--seeds", default="42", type=str, help='e.g. "42,84,126"')
     parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the classification head")
     parser.add_argument("--bz", default=32, type=int, help="Batch size")
     parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate")
     parser.add_argument("--num_epochs", default=200, type=int)
+    parser.add_argument("--patience", default=None, type=int,
+                        help="Early stopping patience (epochs without improvement). Default: 3")
     parser.add_argument("--subset_root", default="icu_benchmarks/data/preprocessed_data", type=str,
                         help="Root path that contains {dataset}/{size}_{seed}/ parquet files")
 
@@ -414,6 +871,9 @@ def main():
 
     sizes = parse_int_list(args.sizes)
     seeds = parse_int_list(args.seeds)
+
+    # Set patience: default to 3 if not specified
+    patience = args.patience if args.patience is not None else 3
 
     # Map flag -> mode for path naming
     mode_str = "head" if args.fine_tune_head else "full"
@@ -462,8 +922,10 @@ def main():
                 batch_size=args.bz,
                 lr=args.lr,
                 num_epochs=args.num_epochs,
+                patience=patience,
                 subset_root=args.subset_root,
                 output_dir=str(output_dir),
+                task=args.task,
             )
             try:
                 result = train_eval_one(run_cfg)
