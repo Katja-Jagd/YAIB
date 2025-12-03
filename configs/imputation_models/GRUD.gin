@@ -1,0 +1,31 @@
+import gin.torch.external_configurables
+import icu_benchmarks.models.wrappers
+import icu_benchmarks.models.dl_models.grud
+import icu_benchmarks.models.utils
+
+# Train params
+train_common.model = @GRUD
+train_common.epochs = 100
+train_common.batch_size = 64
+train_common.patience = 10
+train_common.min_delta = 1e-4
+
+train_common.optimizer = @Adam
+ImputationWrapper.lr_scheduler = "cosine"
+
+# Optimizer params
+Adam.lr = 1e-3
+Adam.weight_decay = 1e-6
+
+# Model params
+GRUD.hidden_size = 128
+GRUD.dropout = 0.2
+GRUD.recurrent_dropout = 0.2
+GRUD.x_imputation = "zero"
+GRUD.input_decay = "exp_relu"
+GRUD.hidden_decay = "exp_relu"
+GRUD.activation = "tanh"
+GRUD.recurrent_activation = "hardsigmoid"
+GRUD.use_decay_bias = True
+GRUD.feed_masking = True
+GRUD.masking_decay = None

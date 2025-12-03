@@ -1,0 +1,9 @@
+# LENGTH OF STAY EXPERIMENT CONFIGURATION
+
+# IMPORT BASE REGRESSION CONFIGURATION
+include "configs/tasks/Regression.gin"
+
+# LENGTH OF STAY SPECIFIC OVERRIDES
+# Override outcome scaling for length of stay: 0-336 hours (14 days) as max
+base_regression_preprocessor.outcome_min = 0
+base_regression_preprocessor.outcome_max = 336

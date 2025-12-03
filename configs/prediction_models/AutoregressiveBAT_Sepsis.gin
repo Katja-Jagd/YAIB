@@ -1,0 +1,53 @@
+# Configuration for Autoregressive BAT (Bi-Attentive Transformer) for Sepsis Prediction
+#
+# NOTE: This configuration is SPECIFICALLY for the AutoregressiveBAT model.
+# For other models (e.g., Transformer, LSTM), use the standard Regression.gin task config.
+#
+# AutoregressiveBAT uses causal attention for time series prediction tasks where
+# predictions at timestep t only depend on information from timesteps <= t.
+# This is appropriate for sepsis prediction where we want to predict future sepsis risk
+# based only on past observations.
+
+# Common settings for DL models
+include "configs/prediction_models/common/DLCommon.gin"
+
+# Dataloader - use BATPolarsDataset specifically for BAT models
+BATPolarsDataset.runmode = "regression"
+
+# Train params
+train_common.model = @AutoregressiveBAT
+train_common.dataset_class = @BATPolarsDataset
+train_common.verbose = True
+train_common.cpu = False
+
+# Optimizer params
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = (1e-5, 1e-3)
+
+# Autoregressive BAT model params (BAT-specific architecture)
+model/hyperparameter.class_to_tune = @AutoregressiveBAT
+model/hyperparameter.value_embed_size = [8, 16, 32, 64]  # Must be even!
+model/hyperparameter.layers = [2, 6, 8, 12]
+model/hyperparameter.heads = (1, 2)
+model/hyperparameter.dropout = (0.2, 0.4)
+model/hyperparameter.attn_dropout = (0.2, 0.4)
+model/hyperparameter.use_mask = True  # Important for handling missing values in time series
+model/hyperparameter.prediction_head = @RegressionHead  # Use regression head for sepsis prediction
+model/hyperparameter.prediction_head_kwargs = {"output_dim": 1}
+
+# Training parameters
+train_common.epochs = 50
+train_common.batch_size = 64
+train_common.patience = 5
+train_common.min_delta = 1e-4
+
+# Hyperparameter tuning settings
+tune_hyperparameters.scopes = ["model", "optimizer"]
+tune_hyperparameters.n_initial_points = 5
+tune_hyperparameters.n_calls = 10
+tune_hyperparameters.folds_to_tune_on = 3
+
+# Cross-validation params
+execute_repeated_cv.cv_repetitions = 1
+execute_repeated_cv.cv_folds = 5
