@@ -171,41 +171,89 @@ def execute_repeated_cv(
             # Perform downsampling if enabled
             # ======================= #
             if enable_subset_train:
-                print(f"\n\n\n")
+                print("\n\n\n")
                 print(f"🔍 Subsetting training data to {subset_train_size} samples (seed={subset_train_seed})...")
-                print(f"\n\n\n")
-                original_train_outcome = data["train"]["OUTCOME"]
-                original_train_features = data["train"]["FEATURES"]
-                
-                downsampled_outcome = downsample_preserving_balance(
-                    df=original_train_outcome,
-                    label_col="label",
-                    total_samples=subset_train_size,
-                    seed=subset_train_seed
-                )      
+                print("\n\n\n")
 
-                selected_ids = downsampled_outcome.select("stay_id").to_series().to_list()
-                downsampled_features = original_train_features.filter(pl.col("stay_id").is_in(selected_ids))
-
-                data["train"]["OUTCOME"] = downsampled_outcome
-                data["train"]["FEATURES"] = downsampled_features
-
-                # Define path to save the preprocessed (and downsampled) data
+                # Define folder path for preprocessed (and potentially downsampled) data
                 dataset_name = os.path.basename(data_dir)
-                folder_path = f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/{str(dataset_name)}/{str(subset_train_size)}_{str(subset_train_seed)}"
+                folder_path = (
+                    f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/"
+                    f"{dataset_name}/{subset_train_size}_{subset_train_seed}"
+                )
+
                 os.makedirs(folder_path, exist_ok=True)
 
-                # Save all splits to disk
-                for split, split_data in data.items():
-                    for key, df in split_data.items():
+                # List of expected files for each split and key
+                expected_files = [
+                    ("train", "OUTCOME"),
+                    ("train", "FEATURES"),
+                    ("val", "OUTCOME"),
+                    ("val", "FEATURES"),
+                    ("test", "OUTCOME"),
+                    ("test", "FEATURES"),
+                ]
+
+                # Check if all expected .parquet files already exist
+                all_exist = True
+                for split, key in expected_files:
+                    file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
+                    if not os.path.exists(file_path):
+                        all_exist = False
+                        break
+
+                # ---------------------------------------------------
+                # CASE 1: Files already exist → load them and skip processing
+                # ---------------------------------------------------
+                if all_exist:
+                    print(f"✅ Preprocessed subset already exists. Loading from:\n  {folder_path}")
+
+                    for split, key in expected_files:
                         file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
                         try:
-                            df.write_parquet(file_path)
-                            print(f"Saved {split}_{key} DataFrame as: {file_path}")
+                            data[split][key] = pl.read_parquet(file_path)
+                            print(f"Loaded existing {split}_{key} from: {file_path}")
                         except Exception as e:
-                            print(f"Failed to save {split}_{key} to {file_path}: {e}")
+                            print(f"❌ Failed to load {file_path}: {e}")
+                            raise RuntimeError("Existing preprocessed dataset is incomplete or corrupted.")
 
-                print(f"\n✅ PREPROCESSED DATA (including downsampled train) SAVED to: {folder_path}\n")
+                    print("\n✅ DONE — Using cached preprocessed subset.\n")
+
+                # ---------------------------------------------------
+                # CASE 2: Files do NOT exist → perform downsampling and save
+                # ---------------------------------------------------
+                else:
+                    print("⚠️ Subset data does not exist — performing downsampling...")
+
+                    original_train_outcome = data["train"]["OUTCOME"]
+                    original_train_features = data["train"]["FEATURES"]
+
+                    # Downsample
+                    downsampled_outcome = downsample_preserving_balance(
+                        df=original_train_outcome,
+                        label_col="label",
+                        total_samples=subset_train_size,
+                        seed=subset_train_seed
+                    )
+
+                    selected_ids = downsampled_outcome.select("stay_id").to_series().to_list()
+                    downsampled_features = original_train_features.filter(pl.col("stay_id").is_in(selected_ids))
+
+                    # Replace train split
+                    data["train"]["OUTCOME"] = downsampled_outcome
+                    data["train"]["FEATURES"] = downsampled_features
+
+                    # Save all splits
+                    for split, split_data in data.items():
+                        for key, df in split_data.items():
+                            file_path = os.path.join(folder_path, f"{split}_{key}.parquet")
+                            try:
+                                df.write_parquet(file_path)
+                                print(f"💾 Saved {split}_{key} as: {file_path}")
+                            except Exception as e:
+                                print(f"❌ Failed to save {split}_{key} to {file_path}: {e}")
+
+                    print(f"\n✅ PREPROCESSED DATA SAVED to: {folder_path}\n")
             # ======================= #
     
             preprocess_time = datetime.now() - start_time
@@ -251,3 +299,4 @@ def execute_repeated_cv(
         log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
 
     return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
+
