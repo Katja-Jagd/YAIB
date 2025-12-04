@@ -37,6 +37,14 @@ parser = argparse.ArgumentParser(description="Fine-tuning hyperparameter tuning 
 parser.add_argument('--size', '-s', type=int, required=True, help='Size of the dataset')
 parser.add_argument('--fine_tuning_dataset', '-d', type=str, required=True, help='Name of the fine-tuning dataset')
 parser.add_argument('--fine_tune_head', '-f', type=str, required=True, help='Fine-tune only the head (True/False)')
+parser.add_argument(
+    '--lrs',
+    nargs='+',
+    type=float,
+    required=False,
+    default=[1e-3, 1e-2],    # your current defaults
+    help='List of learning rates to try'
+)
 
 args = parser.parse_args()
 
@@ -62,16 +70,16 @@ gin.parse_config_file("/work3/s185395/YAIB/configs/tasks/BinaryClassification.gi
 
 if fine_tuning_dataset == 'eicu': 
     # Pre-trained on pooled mimic + miiv
-    model_path = Path("/work3/s185395/yaib_logs/mimic_miiv/LOS/SSL_BAT_tuned_mimic_miiv/2025-08-27T10-33-15/repetition_0/fold_0/model.ckpt")
-
+    model_path = Path("/work3/s185395/yaib_logs/mimic_miiv/LOS/SSL_BAT_tuned_mimic_miiv/2025-11-17T11-33-11/repetition_0/fold_0/model.ckpt")
+    bz = 32
 elif fine_tuning_dataset == 'miiv': 
     # Pre-trained on pooled eicu + mimic
-    model_path = Path("/work3/s185395/yaib_logs/eicu_mimic/LOS/SSL_BAT_tuned_eicu_mimic/2025-08-28T01-27-19/repetition_0/fold_0/model.ckpt")
-
+    model_path = Path("/work3/s185395/yaib_logs/eicu_mimic/LOS/SSL_BAT_tuned_eicu_mimic/2025-11-18T01-30-40/repetition_0/fold_0/model.ckpt")
+    bz = 64
 elif fine_tuning_dataset == 'mimic': 
     # Pre-trained on pooled eicu + miiv
-    model_path = Path("/work3/s185395/yaib_logs/eicu_miiv/LOS/SSL_BAT_tuned_eicu_miiv/2025-08-27T23-57-28/repetition_0/fold_0/model.ckpt")
-
+    model_path = Path("/work3/s185395/yaib_logs/eicu_miiv/LOS/SSL_BAT_tuned_eicu_miiv/2025-11-17T18-49-46/repetition_0/fold_0/model.ckpt")
+    bz = 64
 ckpt = torch.load(model_path, map_location="cpu")
 hparams = ckpt.get("hyper_parameters", {})
 
@@ -95,7 +103,7 @@ classification_model = EncoderPrediction(
     prediction_head_kwargs={"num_classes": 2}
 )
 
-def run_experiment(bz, lr, model_path, fine_tune_head, num_epochs = 200):
+def run_experiment(bz, lr, model_path, fine_tune_head, num_epochs = 100):
 
     # Setting seed for reproducibility (Only want variability in the subset datasets)
     seed = 42
@@ -173,7 +181,7 @@ def run_experiment(bz, lr, model_path, fine_tune_head, num_epochs = 200):
     train_auprcs, val_auprcs = [], []
 
     # Set early stopping parameters
-    patience = 6
+    patience = 3
     best_val_auprc = 0
     epochs_without_improvement = 0
     best_model_state = None
@@ -250,7 +258,7 @@ def run_experiment(bz, lr, model_path, fine_tune_head, num_epochs = 200):
         val_aurocs.append(val_auroc)
         val_auprcs.append(val_auprc)
 
-        #print(f"🧪 Validation — Loss: {avg_val_loss:.4f} | AUROC: {val_auroc:.4f} | AUPRC: {val_auprc:.4f}")
+        print(f"🧪 Validation — Loss: {avg_val_loss:.4f} | AUROC: {val_auroc:.4f} | AUPRC: {val_auprc:.4f}")
 
         # ======== EARLY STOPPING & BEST MODEL SAVE ========
         scheduler.step()  # update learning rate based on val AUPRC
@@ -324,7 +332,8 @@ from torch.utils.data import DataLoader
 
 
 hp_results = []
-seeds = [42, 84, 126, 168, 210] 
+#seeds = [42, 84, 126, 168, 210]
+seeds = [42] 
 for seed in seeds: 
 
     dataset = fine_tuning_dataset # eicu, miiv, mimic
@@ -349,15 +358,17 @@ for seed in seeds:
             print(f"✅ Loaded {split} data")
         else:
             print(f"⚠️ Missing files for split '{split}'")
-
+    
     finetune_train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
     finetune_val_set = BATPolarsDataset(data=data, split="val", ram_cache=False, runmode=RunMode.classification,vars=vars_dict)
     finetune_test_set = BATPolarsDataset(data=data, split="test", ram_cache=False, runmode=RunMode.classification, vars=vars_dict)
 
 
     # Learning rates and batch sizes to test
-    lrs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2]
-    batch_sizes = [64]
+    #lrs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2]
+    #lrs = [1e-3, 1e-2]
+    lrs = args.lrs
+    batch_sizes = [bz]
 
     # Store results
     results = []
@@ -371,6 +382,7 @@ for seed in seeds:
 
     hp_results.append(results)
     print(f'Finished results from seed: {seed}')
+    print(result)
 
 
 # Assuming hp_results is your list of rounds with dicts inside
@@ -398,6 +410,9 @@ for lr, data in metrics_by_lr.items():
     auprc_mean = np.mean(data['test_auprc'])
     auprc_sd = np.std(data['test_auprc'])
 
+    print(f"\nLR {lr}: AUROC mean={auroc_mean:.4f}, sd={auroc_sd:.4f}, "
+          f"AUPRC mean={auprc_mean:.4f}, sd={auprc_sd:.4f}")  # <-- PRINT HERE
+    
     if auprc_mean > best_auprc_mean:
         best_auprc_mean = auprc_mean
         best_lr_info = {
@@ -408,6 +423,10 @@ for lr, data in metrics_by_lr.items():
             'test_auprc_mean': round(auprc_mean, 4),
             'test_auprc_sd': round(auprc_sd, 4),
         }
+
+# Print results
+print(f'Best results:\n{best_lr_info}')
+print(f'fine_tune_head: {fine_tune_head}') # [DEBUG]
 
 # Build the filename
 if fine_tune_head == True:
