@@ -22,25 +22,25 @@ optimizer/hyperparameter.lr = (1e-5, 1e-3)
 
 # Encoder params
 model/hyperparameter.class_to_tune = @BAT
-model/hyperparameter.value_embed_size = [8, 16, 32, 64] # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
-model/hyperparameter.layers = [2, 6, 8, 12] 
-model/hyperparameter.heads = (1, 2)
-model/hyperparameter.dropout = (0.2, 0.4) 
-model/hyperparameter.attn_dropout = (0.2, 0.4)  
+model/hyperparameter.value_embed_size = [16, 64, 128] # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
+model/hyperparameter.layers = [2, 6, 12] 
+model/hyperparameter.heads = (1, 2, 4)
+model/hyperparameter.dropout = (0.1, 0.2, 0.4) 
+model/hyperparameter.attn_dropout = (0.1, 0.2, 0.4)  
 model/hyperparameter.use_mask = False
 model/hyperparameter.prediction_head = @BinaryClassificationHead
 model/hyperparameter.prediction_head_kwargs = {"num_classes": 2}
 model/hyperparameter.pooling = "max" # R had mean
 
-train_common.epochs = 50
-train_common.batch_size = 64
+train_common.epochs = 25 # 50  
+train_common.batch_size = (64, 128, 256)
 train_common.patience = 5
 train_common.min_delta = 1e-4
 
 tune_hyperparameters.scopes = ["model", "optimizer"]  # defines the scopes that the random search runs in
 tune_hyperparameters.n_initial_points = 5  # defines random points to initilaize gaussian process
-tune_hyperparameters.n_calls = 10  # number of iterations to find best set of hyperparameters
-tune_hyperparameters.folds_to_tune_on = 3  # number of folds to use to evaluate set of hyperparameters
+tune_hyperparameters.n_calls = 25  # number of iterations to find best set of hyperparameters
+tune_hyperparameters.folds_to_tune_on = 1  # number of folds to use to evaluate set of hyperparameters
 
 # CV params 
 execute_repeated_cv.cv_repetitions = 1

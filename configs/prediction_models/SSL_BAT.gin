@@ -19,17 +19,17 @@ train_common.verbose = True
 
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
-optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.weight_decay = (1e-6, 1e-4)
 optimizer/hyperparameter.lr = (1e-5, 1e-3)
 
 # Encoder params
 
 model/hyperparameter.class_to_tune = @SSL_BAT
-model/hyperparameter.value_embed_size = [8, 64, 128] # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
+model/hyperparameter.value_embed_size = [8, 32 , 64, 128] # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
 model/hyperparameter.layers = [2, 6, 8, 12]
-model/hyperparameter.heads = (1, 2)
-model/hyperparameter.dropout = (0.2, 0.4)
-model/hyperparameter.attn_dropout = (0.2, 0.4)
+model/hyperparameter.heads = (1, 2, 4)
+model/hyperparameter.dropout = (0.2, 0.6)
+model/hyperparameter.attn_dropout = (0.2, 0.6)
 model/hyperparameter.use_mask = False
 model/hyperparameter.prediction_head = @ForecastingHead
 model/hyperparameter.pooling = "max"
@@ -40,8 +40,8 @@ model/hyperparameter.prediction_head_kwargs = {
 
 # Train params
 train_common.epochs = 10
-train_common.batch_size = 64
-train_common.patience = 10
+train_common.batch_size = 128
+train_common.patience = 3 # 5 
 train_common.min_delta = 1e-4
 
 train_common.dataset_class = @SSLPolarsDataset
@@ -49,5 +49,5 @@ train_common.dataset_class = @SSLPolarsDataset
 
 tune_hyperparameters.scopes = ["model", "optimizer"]  # defines the scopes that the random search runs in
 tune_hyperparameters.n_initial_points = 5  # defines random points to initilaize gaussian process
-tune_hyperparameters.n_calls = 10  # number of iterations to find best set of hyperparameters
+tune_hyperparameters.n_calls = 25  # number of iterations to find best set of hyperparameters
 tune_hyperparameters.folds_to_tune_on = 1  # number of folds to use to evaluate set of hyperparameters

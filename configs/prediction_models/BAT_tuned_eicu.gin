@@ -17,16 +17,16 @@ train_common.cpu = False #trying this because testing is failing from cli [DEBUG
 
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
-optimizer/hyperparameter.weight_decay = 1e-6
-optimizer/hyperparameter.lr = 1.0783e-04 # 4e-05
+optimizer/hyperparameter.weight_decay = 5.11538e-05
+optimizer/hyperparameter.lr = 5.09303e-05
 
 # Encoder params
 model/hyperparameter.class_to_tune = @BAT
-model/hyperparameter.value_embed_size = 16 # 32 !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
-model/hyperparameter.layers = 12 # 2 
-model/hyperparameter.heads = 2
-model/hyperparameter.dropout = 0.23236 # 0
-model/hyperparameter.attn_dropout = 0.29136 # 0 
+model/hyperparameter.value_embed_size = 64 # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
+model/hyperparameter.layers = 6 
+model/hyperparameter.heads = 1
+model/hyperparameter.dropout = 0.1
+model/hyperparameter.attn_dropout = 0.4 
 model/hyperparameter.use_mask = False
 model/hyperparameter.prediction_head = @BinaryClassificationHead
 model/hyperparameter.prediction_head_kwargs = {"num_classes": 2}
@@ -47,6 +47,6 @@ execute_repeated_cv.cv_repetitions = 1
 execute_repeated_cv.cv_folds = 5
 
 # Enable subsetting of training data
-execute_repeated_cv.enable_subset_train = True
-execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9506 
-execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 
+#execute_repeated_cv.enable_subset_train = True
+#execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9506 
+#execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 

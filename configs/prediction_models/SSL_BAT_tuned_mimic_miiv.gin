@@ -20,17 +20,17 @@ train_common.verbose = True
 
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
-optimizer/hyperparameter.weight_decay = 1e-6
-optimizer/hyperparameter.lr = 7.7812e-4
+optimizer/hyperparameter.weight_decay = 2.70317e-06
+optimizer/hyperparameter.lr = 1.95451e-05
 
 # Encoder params
 
 model/hyperparameter.class_to_tune = @SSL_BAT
 model/hyperparameter.value_embed_size = 128 # !HAS TO BE EVEN! square brackets mean either of the values and not interval like ()
-model/hyperparameter.layers = 2
-model/hyperparameter.heads = 1
-model/hyperparameter.dropout = 0.36427
-model/hyperparameter.attn_dropout = 0.20659
+model/hyperparameter.layers = 12
+model/hyperparameter.heads = 4
+model/hyperparameter.dropout = 0.1
+model/hyperparameter.attn_dropout = 0.4
 model/hyperparameter.use_mask = False
 model/hyperparameter.prediction_head = @ForecastingHead
 model/hyperparameter.pooling = "max"
@@ -41,9 +41,9 @@ model/hyperparameter.prediction_head_kwargs = {
 
 # Train params
 train_common.epochs = 200
-train_common.batch_size = 64
-train_common.patience = 15
-train_common.min_delta = 5e-3
+train_common.batch_size = 32
+train_common.patience = 50
+train_common.min_delta = 1e-4 # 5e-3
 
 train_common.dataset_class = @SSLPolarsDataset
 

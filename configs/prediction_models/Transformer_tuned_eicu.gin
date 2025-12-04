@@ -10,25 +10,27 @@ train_common.num_workers = 0 # To avoid freeze during dataloading
 train_common.dataset_class = @PredictionPolarsDataset # Have to add now in gin after redesign of train_common()
 
 optimizer/hyperparameter.class_to_tune = @Adam
-optimizer/hyperparameter.weight_decay = 1e-6
-optimizer/hyperparameter.lr = 5.4961e-5
+optimizer/hyperparameter.weight_decay = 5.92893e-05
+optimizer/hyperparameter.lr = 1.79246e-05
 
 # Encoder params
 model/hyperparameter.class_to_tune = @Transformer
-model/hyperparameter.ff_hidden_mult = 1
-model/hyperparameter.l1_reg = 0.47009
+model/hyperparameter.ff_hidden_mult = 4
+model/hyperparameter.l1_reg = 7.07969e-05 
 model/hyperparameter.num_classes = %NUM_CLASSES
-model/hyperparameter.hidden = 450
-model/hyperparameter.heads = 3
-model/hyperparameter.depth = 10
-model/hyperparameter.dropout = 0.16687
-model/hyperparameter.dropout_att = 0.28927
+model/hyperparameter.hidden = 512
+model/hyperparameter.heads = 1
+model/hyperparameter.depth = 20
+model/hyperparameter.dropout = 0.1
+model/hyperparameter.dropout_att = 0.2
 
 train_common.epochs = 200
-train_common.batch_size = 256
+train_common.batch_size = 128
 train_common.patience = 10
 train_common.min_delta = 1e-4
 
-execute_repeated_cv.enable_subset_train = True
-execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9000, 9506 
-execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 
+#execute_repeated_cv.enable_subset_train = True
+#execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9000, 9506 
+#execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 
+
+scp -i ~/.ssh/gbar -r s185395@transfer.gbar.dtu.dk:/work3/s185395/yaib_logs/eicu_mimic/LOS/SSL_BAT_tuned_eicu_mimic/2025-11-18T01-30-40/repetition_0/fold_0/model.ckpt /Users/katjajagd/Downloads/resubmission_neurips_results/models/SSL_eicu_mimic/model.ckpt
