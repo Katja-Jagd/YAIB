@@ -7,7 +7,7 @@ from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper
 import torch
 import numpy as np
 from torch import nn
-from x_transformers import Encoder
+from x_transformers import Encoder, Decoder
 
 
 # Prediction head classes 
@@ -21,6 +21,31 @@ class BinaryClassificationHead(nn.Module):
         return self.linear(x)
     
 @gin.configurable
+class RegressionHead(nn.Module):
+    def __init__(self, input_dim, output_dim=1):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+
+    def forward(self, x):
+        return self.linear(x).squeeze(-1)
+
+@gin.configurable
+class TimeseriesClassificationHead(nn.Module):
+    """
+    Classification head for per-timestep predictions.
+    Takes features with temporal dimension and outputs predictions at each timestep.
+    """
+    def __init__(self, input_dim, num_classes):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, num_classes)
+        self.num_classes = num_classes
+
+    def forward(self, x):
+        # x shape: (N, T, E) where N=batch, T=timesteps, E=embedding_dim
+        # output shape: (N, T, num_classes)
+        return self.linear(x)
+
+@gin.configurable
 class ForecastingHead(nn.Module):
     def __init__(self, input_dim, forecast_len, sensors_count):
         super().__init__()
@@ -32,7 +57,7 @@ class ForecastingHead(nn.Module):
         out = self.linear(x)
         return out.reshape(-1, self.sensors_count, self.forecast_len)
 
-# Own encoder prediction class that plugs R's model to different prediction heads 
+# Own encoder prediction class that plugs R's model to different prediction heads
 @gin.configurable
 class EncoderPrediction(nn.Module):
     def __init__(self, encoder_class, prediction_head, prediction_head_kwargs=None):
@@ -40,9 +65,10 @@ class EncoderPrediction(nn.Module):
         self.encoder_class = encoder_class
         self.prediction_head = prediction_head
         self.prediction_head_kwargs = prediction_head_kwargs or {}
+        self.is_autoregressive = isinstance(self.encoder_class, AutoregressiveEncoderCrossParallel)
 
-        # Handeling input dim for head depending on the output dimension of the encoding model 
-        if isinstance(self.encoder_class, EncoderClassifierCrossParallel):
+        # Handling input dim for head depending on the output dimension of the encoding model
+        if isinstance(self.encoder_class, (EncoderClassifierCrossParallel, AutoregressiveEncoderCrossParallel)):
             if self.encoder_class.use_static:
                 self.input_dim = (
                     2 * (self.encoder_class.sensor_encoding_out + self.encoder_class.embed_out)
@@ -54,8 +80,8 @@ class EncoderPrediction(nn.Module):
                 )
         else:
             raise ValueError("Unknown encoder class: cannot determine input dimension.")
-    
-        # Prediction head initialization 
+
+        # Prediction head initialization
         self.head = self.prediction_head(
             input_dim=self.input_dim,
             **self.prediction_head_kwargs
@@ -63,13 +89,21 @@ class EncoderPrediction(nn.Module):
 
     def forward(self, x, static, time, sensor_mask):
         features = self.encoder_class(x, static, time, sensor_mask)
-        
+
         # Sanity check shape
-        if features.shape[1] != self.input_dim:
-            raise ValueError(
-                f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
-            )
-        
+        # For autoregressive encoder: features shape is (N, T, E)
+        # For regular encoder: features shape is (N, E)
+        if self.is_autoregressive:
+            if features.shape[2] != self.input_dim:
+                raise ValueError(
+                    f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[2]})"
+                )
+        else:
+            if features.shape[1] != self.input_dim:
+                raise ValueError(
+                    f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
+                )
+
         return self.head(features)
 
 
@@ -163,6 +197,269 @@ class PositionalEncodingTF(nn.Module):
         pe = self.getPE(P_time)
         # pe = pe.cuda()
         return pe
+
+@gin.configurable
+class AutoregressiveEncoderCrossParallel(nn.Module):
+    """
+    Autoregressive version of the BAT encoder with causal attention.
+    Both sensor and time attentions are designed to be causal with regards to time,
+    meaning at each timestep t, only information from timesteps <= t is used.
+
+    Returns per-timestep representations instead of pooled representations.
+    """
+
+    def __init__(
+        self,
+        device="cpu",
+        sensors_count=37,
+        max_timepoint_count=215,
+        static_count=8,
+        value_embed_size=8,
+        layers=1,
+        heads=1,
+        dropout=0.2,
+        attn_dropout=0.2,
+        return_intermediates=False,
+        use_mask=False,
+        use_static=True,
+        obs_strategy="both",
+        **kwargs
+    ):
+        super().__init__()
+
+        self.return_intermediates = return_intermediates
+        self.obs_strategy = obs_strategy
+        self.device = device
+        self.use_mask = use_mask
+        self.sensors_count = sensors_count
+        self.max_timepoint_count = max_timepoint_count
+        self.static_count = static_count
+        self.use_static = use_static
+
+        if self.obs_strategy in ("indicator_only", "obs_only"):
+            self.sensor_axis_dim = self.sensors_count
+            self.time_axis_dim = self.max_timepoint_count
+        else:
+            self.sensor_axis_dim = 2 * self.sensors_count
+            self.time_axis_dim = min(2 * self.max_timepoint_count, 100)
+
+        self.static_out = self.static_count + 4
+        self.embed_out = value_embed_size
+        self.sensor_encoding_out = min(600, round(1.6 * sensors_count**0.50))
+        if self.sensor_encoding_out % 2 != 0:
+            self.sensor_encoding_out += 1
+
+        # Sensor attention layers (non-causal, operates within each timestep)
+        self.attn_layers_1 = Encoder(
+            dim=self.sensor_encoding_out + self.embed_out,
+            depth=layers,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=dropout,
+            attn_flash=False,
+        )
+
+        # Time attention layers (CAUSAL - only attend to past timesteps)
+        # Use Decoder for causal attention
+        self.attn_layers_2 = Decoder(
+            dim=self.sensor_encoding_out + self.embed_out,
+            depth=layers,
+            heads=heads,
+            attn_dropout=attn_dropout,
+            ff_dropout=dropout,
+            attn_flash=False,
+        )
+
+        self.sensor_encoding = torch.nn.Embedding(
+            sensors_count, self.sensor_encoding_out
+        )
+
+        if self.obs_strategy in ("indicator_only", "obs_only"):
+            self.time_embedding = nn.Linear(1, self.embed_out)
+        else:
+            self.time_embedding = nn.Linear(2, self.embed_out)
+
+        self.pos_encoder = PositionalEncodingTF(
+            self.sensor_encoding_out + self.embed_out
+        )
+
+        # Output dimension per timestep
+        self.output_dim = 2 * (self.sensor_encoding_out + self.embed_out)
+
+        self.nonlinear_merger_1 = nn.Linear(
+            self.output_dim,
+            self.output_dim,
+        )
+
+        if self.use_static:
+            print("use static in autoregressive encoder")
+            self.static_embedding = nn.Linear(self.static_count, self.static_out)
+            self.output_dim_with_static = self.output_dim + self.static_out
+            self.nonlinear_merger_2 = nn.Linear(
+                self.output_dim_with_static,
+                self.output_dim_with_static,
+            )
+
+    def forward(self, x, static, time, sensor_mask, **kwargs):
+        """
+        Forward pass with causal attention.
+
+        Returns:
+            Tensor of shape (N, T, E) where N=batch, T=timesteps, E=embedding_dim
+        """
+
+        x_time = torch.clone(x).unsqueeze(3)  # (N, F, T, E)
+
+        # Add indication for missing values to data
+        x_time_mask = torch.clone(sensor_mask).unsqueeze(3)  # (N, F, T, E)
+        if self.obs_strategy == "indicator_only":
+            x_time = x_time_mask.float()
+        elif self.obs_strategy == "obs_only":
+            x_time = x_time
+        elif self.obs_strategy == "both":
+            x_time = torch.cat([x_time, x_time_mask], axis=3)  # (N, F, T, 2E)
+        else:
+            raise NotImplementedError(f"Obs strategy {self.obs_strategy} not found.")
+
+        # Make embeddings
+        x_time = self.time_embedding(x_time)  # (N, F, T, embed_out)
+        del x_time_mask
+
+        # Make "encodings" for each sensor
+        s_list = torch.arange(0, self.sensors_count)
+        sensor_encoding = x.clone()
+        sensor_encoding = torch.permute(sensor_encoding, (0, 2, 1))  # (N, T, F)
+        sensor_encoding[:, :, :] = s_list
+        sensor_encoding = self.sensor_encoding(sensor_encoding.long())  # (N, T, F, sensor_encoding_out)
+        sensor_encoding = torch.permute(sensor_encoding, (0, 2, 1, 3))  # (N, F, T, sensor_encoding_out)
+        x_time = torch.cat((x_time, sensor_encoding), dim=3)  # (N, F, T, embed_out + sensor_encoding_out)
+        del sensor_encoding
+
+        # Add positional encodings
+        with torch.no_grad():
+            pe = self.pos_encoder(time).to(x_time.device)  # (N, T, pe)
+            pe = pe.unsqueeze(2)  # (N, T, 1, pe)
+            pe = pe.repeat(1, 1, self.sensors_count, 1)  # (N, T, F, pe)
+            pe = torch.permute(pe, (0, 2, 1, 3))  # (N, F, T, pe)
+
+        x_time = torch.add(x_time, pe)  # (N, F, T, E)
+        del pe
+
+        # Get versions/shapes ready for attention
+        n, f, t, e = x_time.shape
+
+        # Make copy for sensor attention
+        x_sensor = x_time.clone()
+        x_sensor = torch.permute(x_sensor, (0, 2, 1, 3))  # (N, T, F, E)
+        x_time = x_time.view(n * f, t, e)  # (N*F, T, E)
+        x_sensor = x_sensor.reshape(n * t, f, e)  # (N*T, F, E)
+
+        # Make mask of all empty (missing) timepoints
+        timepoint_mask = torch.clone(x)  # (N, F, T)
+        timepoint_mask = torch.permute(timepoint_mask, (0, 2, 1))  # (N, T, F)
+        mask = (torch.count_nonzero(timepoint_mask, dim=2)) > 0  # (N, T)
+        mask = mask.repeat(self.sensors_count, 1)  # (N*F, T)
+
+        if not self.use_mask:
+            mask_attention = None
+        else:
+            mask_attention = mask
+
+        del x
+        del timepoint_mask
+
+        # Run sensor attention (non-causal, operates within each timestep)
+        if self.return_intermediates:
+            x_sensor, sensor_intermediates = self.attn_layers_1(
+                x_sensor, return_hiddens=True
+            )
+        else:
+            x_sensor = self.attn_layers_1(x_sensor)
+        x_sensor = x_sensor.reshape(n, t, f, e)  # (N, T, F, E)
+
+        # Run time attention (CAUSAL - autoregressive)
+        if self.return_intermediates:
+            x_time, time_intermediates = self.attn_layers_2(
+                x_time, mask=mask_attention, return_hiddens=True
+            )
+        else:
+            x_time = self.attn_layers_2(x_time, mask=mask_attention)
+        x_time = x_time.reshape(n, f, t, e)  # (N, F, T, E)
+        mask = mask.reshape(n, f, t)  # (N, F, T)
+
+        # Cross and perform attention again
+        cross = True
+        if cross:
+            # Cross for second round of sensor attention
+            x_time = torch.permute(x_time, (0, 2, 1, 3))  # (N, T, F, E)
+            x_time = x_time.reshape(n * t, f, e)  # (N*T, F, E)
+            if self.return_intermediates:
+                x_time, time_intermediates = self.attn_layers_1(
+                    x_time, return_hiddens=True
+                )
+            else:
+                x_time = self.attn_layers_1(x_time)
+            x_time = x_time.view(n, t, f, e)  # (N, T, F, E)
+            x_time = torch.permute(x_time, (0, 2, 1, 3))  # (N, F, T, E)
+
+            # Cross for second round of time attention (CAUSAL)
+            x_sensor = torch.permute(x_sensor, (0, 2, 1, 3))  # (N, F, T, E)
+            x_sensor = x_sensor.reshape(n * f, t, e)  # (N*F, T, E)
+            if self.return_intermediates:
+                x_sensor, sensor_intermediates = self.attn_layers_2(
+                    x_sensor, mask=mask_attention, return_hiddens=True
+                )
+            else:
+                x_sensor = self.attn_layers_2(x_sensor, mask=mask_attention)
+            x_sensor = x_sensor.view(n, f, t, e)  # (N, F, T, E)
+
+        del mask_attention
+
+        # Instead of pooling, we want to return per-timestep representations
+        # Reshape to (N, T, F, E) and aggregate over sensor dimension
+        x_sensor = torch.permute(x_sensor, (0, 2, 1, 3))  # (N, T, F, E)
+        x_time = torch.permute(x_time, (0, 2, 1, 3))  # (N, T, F, E)
+
+        # Take mean over sensors to get (N, T, E)
+        # Use masking to handle missing values
+        if self.use_mask:
+            mask_for_pooling = torch.permute(mask, (0, 2, 1))  # (N, T, F)
+            mask_expanded = mask_for_pooling.unsqueeze(-1).expand(x_sensor.size()).float()
+
+            # Masked mean for sensor pathway
+            sensor_sum = torch.sum(x_sensor * mask_expanded, dim=2)  # (N, T, E)
+            sensor_counts = mask_expanded.sum(2).clamp(min=1e-9)  # (N, T, E)
+            x_sensor_pooled = sensor_sum / sensor_counts  # (N, T, E)
+
+            # Masked mean for time pathway
+            time_sum = torch.sum(x_time * mask_expanded, dim=2)  # (N, T, E)
+            time_counts = mask_expanded.sum(2).clamp(min=1e-9)  # (N, T, E)
+            x_time_pooled = time_sum / time_counts  # (N, T, E)
+        else:
+            x_sensor_pooled = torch.mean(x_sensor, dim=2)  # (N, T, E)
+            x_time_pooled = torch.mean(x_time, dim=2)  # (N, T, E)
+
+        # Concatenate sensor and time pathways
+        x_merged = torch.cat((x_sensor_pooled, x_time_pooled), dim=2)  # (N, T, 2*E)
+        x_merged = self.nonlinear_merger_1(x_merged).relu()  # (N, T, 2*E)
+
+        if self.use_static:
+            # Broadcast static features across time dimension
+            static_embedded = self.static_embedding(static)  # (N, static_out)
+            static_expanded = static_embedded.unsqueeze(1).expand(-1, t, -1)  # (N, T, static_out)
+            x_merged = torch.cat((x_merged, static_expanded), dim=2)  # (N, T, 2*E + static_out)
+            nonlinear_merged = self.nonlinear_merger_2(x_merged).relu()  # (N, T, 2*E + static_out)
+        else:
+            nonlinear_merged = x_merged
+
+        if self.return_intermediates:
+            return (
+                sensor_intermediates.attn_intermediates[0].post_softmax_attn,
+                time_intermediates.attn_intermediates[0].post_softmax_attn,
+            )
+
+        return nonlinear_merged  # (N, T, E) where E = output_dim or output_dim_with_static
+
 
 @gin.configurable
 class EncoderClassifierCrossParallel(nn.Module):
@@ -589,4 +886,75 @@ class SSL_BAT(SSLWrapper):
         )
 
     def forward(self, data, static, time, sensor_mask):
+        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
+
+@gin.configurable
+class AutoregressiveBAT(CustomDLPredictionWrapper):
+    """
+    Autoregressive version of BAT for per-timestep predictions.
+    Uses causal attention to ensure predictions at time t only depend on information from timesteps <= t.
+
+    This is Option A from the implementation plan: use an autoregressive encoder to produce
+    per-timestep representations, then apply a classification/regression head to each timestep.
+    """
+
+    _supported_run_modes = [RunMode.classification, RunMode.regression]
+
+    def __init__(
+        self,
+        input_size,
+        value_embed_size,
+        layers,
+        heads,
+        dropout,
+        attn_dropout,
+        use_mask,
+        prediction_head=TimeseriesClassificationHead,
+        prediction_head_kwargs={"num_classes": 2},
+        lr=1e-4,
+        optimizer=torch.optim.Adam,
+        *args,
+        **kwargs
+    ):
+        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+
+        self.save_hyperparameters()
+
+        # Extract dimensions from dataset
+        sensors_count = input_size[1]
+        max_timepoint_count = input_size[2]
+        static_count = kwargs.get("static_count", 4)  # fallback if static shape isn't passed
+
+        # Instantiate autoregressive encoder with causal attention
+        encoder = AutoregressiveEncoderCrossParallel(
+            device=self.device,
+            value_embed_size=value_embed_size,
+            layers=layers,
+            heads=heads,
+            dropout=dropout,
+            attn_dropout=attn_dropout,
+            use_mask=use_mask,
+            sensors_count=sensors_count,
+            max_timepoint_count=max_timepoint_count,
+            static_count=static_count,
+        )
+
+        # Compose full prediction model
+        self.model = EncoderPrediction(
+            encoder_class=encoder,
+            prediction_head=prediction_head,
+            prediction_head_kwargs=prediction_head_kwargs,
+        )
+
+        # Helps CustomDLPredictionWrapper with setting binary classification metrics
+        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
+
+    def forward(self, data, static, time, sensor_mask):
+        """
+        Forward pass with autoregressive encoder.
+
+        Returns:
+            Tensor of shape (N, T, num_classes) for classification
+            or (N, T) for regression
+        """
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)

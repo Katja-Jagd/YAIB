@@ -18,6 +18,54 @@ from icu_benchmarks.wandb_utils import wandb_log
 import polars as pl
 
 
+# Mapping from task names to their gin configuration files
+TASK_TO_GIN_MAPPING = {
+    # Binary Classification tasks
+    "Mortality": "BinaryClassification",
+    "Mortality24": "BinaryClassification",
+    "AKI": "BinaryClassification",
+    "Sepsis": "BinaryClassification",
+    # Regression tasks
+    "KidneyFunction": "Regression",
+    "LengthOfStay": "LengthOfStay",  # Has its own specialized gin
+    # Imputation
+    "Imputation": "DatasetImputation",
+    # Allow direct gin file names for backwards compatibility
+    "BinaryClassification": "BinaryClassification",
+    "Regression": "Regression",
+    "DatasetImputation": "DatasetImputation",
+}
+
+
+def get_task_gin_and_name(task: str) -> tuple[str, str]:
+    """Maps a task name to its gin config file and folder name.
+
+    Args:
+        task: Task name provided by user (e.g., 'Mortality24', 'LengthOfStay')
+
+    Returns:
+        Tuple of (gin_config_name, folder_name)
+        - gin_config_name: The gin file to load (e.g., 'BinaryClassification')
+        - folder_name: The directory name to use for organizing outputs (e.g., 'Mortality24')
+
+    Raises:
+        ValueError: If task is not recognized
+    """
+    if task not in TASK_TO_GIN_MAPPING:
+        available_tasks = ", ".join(sorted(TASK_TO_GIN_MAPPING.keys()))
+        raise ValueError(
+            f"Unknown task '{task}'. Available tasks: {available_tasks}"
+        )
+
+    gin_config = TASK_TO_GIN_MAPPING[task]
+
+    # For specific task names (Mortality24, AKI, etc.), use the task name for folders
+    # For generic gin names (BinaryClassification, Regression), keep them as-is for backward compatibility
+    folder_name = task
+
+    return gin_config, folder_name
+
+
 def build_parser() -> ArgumentParser:
     """Builds an ArgumentParser for the command line.
 
@@ -27,9 +75,16 @@ def build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Framework for benchmarking ML/DL models on ICU data")
 
     parser.add_argument("-d", "--data-dir", required=True, type=Path, help="Path to the parquet data directory.")
-    parser.add_argument("-t", "--task", default="BinaryClassification", required=True, help="Name of the task gin.")
+    parser.add_argument(
+        "-t",
+        "--task",
+        default="Mortality24",
+        required=True,
+        help="Task name (e.g., Mortality24, AKI, Sepsis, KidneyFunction, LengthOfStay, Imputation). "
+             "Determines both the gin config and folder structure. "
+             "Generic names (BinaryClassification, Regression, DatasetImputation) still supported."
+    )
     parser.add_argument("-n", "--name", help="Name of the (target) dataset.")
-    parser.add_argument("-tn", "--task-name", help="Name of the task, used for naming experiments.")
     parser.add_argument("-m", "--model", default="LGBMClassifier", help="Name of the model gin.")
     parser.add_argument("-e", "--experiment", help="Name of the experiment gin.")
     parser.add_argument("-l", "--log-dir", default=Path("../yaib_logs/"), type=Path, help="Log directory for model weights.")
@@ -242,7 +297,9 @@ def setup_logging(date_format, log_format, verbose):
     logging.basicConfig(format=log_format, datefmt=date_format)
     loggers = ["pytorch_lightning", "lightning_fabric"]
     for logger in loggers:
-        logging.getLogger(logger).handlers[0].setFormatter(logging.Formatter(log_format, datefmt=date_format))
+        logger_obj = logging.getLogger(logger)
+        if logger_obj.handlers:  # Only configure if handlers exist
+            logger_obj.handlers[0].setFormatter(logging.Formatter(log_format, datefmt=date_format))
 
     if not verbose:
         logging.getLogger().setLevel(logging.INFO)

@@ -512,7 +512,12 @@ class PadToLongestCollator:
         if self.runmode == "regression":
             labels = torch.stack([self.pad_1d_tensor(x, max_len) for x in labels])
         else:
-            labels = torch.stack(labels).squeeze()
+            if labels[0].dim() > 0 and labels[0].shape[0] > 1:
+                # Timestep-level labels (ex sepsis) - needs padding
+                labels = torch.stack([self.pad_1d_tensor(x, max_len) for x in labels])
+            else:
+                # Patient-level labels (ex mortality) - no padding needed
+                labels = torch.stack(labels).squeeze()
         #print("[DEBUG] labels padded")
 
         obs_mask = torch.zeros((len(data), max_len), dtype=torch.int32)
@@ -556,7 +561,7 @@ class BATPolarsDataset(CommonPolarsDataset):
         self.outcomes_by_id = {
             stay_id[0] if isinstance(stay_id, tuple) else stay_id: df[self.vars["LABEL"]].to_numpy()
             for stay_id, df in grouped_outcomes
-            }
+        }
 
         static_columns = self.vars["STATIC"]
         dynamic_columns = self.vars["DYNAMIC"]
@@ -576,7 +581,19 @@ class BATPolarsDataset(CommonPolarsDataset):
         self.column_index_map = {col: i for i, col in enumerate(all_columns)}
 
         self.features_by_id = {
-            int(stay_id[0] if isinstance(stay_id, tuple) else stay_id): df.select(all_columns).to_numpy()
+            int(stay_id[0] if isinstance(stay_id, tuple) else stay_id): (
+                df.select(all_columns)
+                .with_columns([
+                    # Cast numeric data and indicator columns to appropriate types
+                    pl.col(col).cast(pl.Float64)
+                    if col in self.dynamic_columns + self.static_columns + [self.sequence_column]
+                    else pl.col(col).cast(pl.Float64)  # Cast missing indicators to Float64 too
+                    if col in self.missingness_columns
+                    else pl.col(col)
+                    for col in all_columns
+                ])
+                .to_numpy()
+            )
             for stay_id, df in grouped
             }
         #print(f"[DEBUG] features_by_id keys: {len(self.features_by_id)}")
@@ -656,7 +673,7 @@ class BATPolarsDataset(CommonPolarsDataset):
         #times_raw = self.features_df.filter(pl.col(self.vars["GROUP"]) == stay_id).select(time_column).to_numpy().flatten()
         #times_raw = features.select(time_column).to_numpy().flatten()
         times_raw = features[:, col_idx[self.sequence_column]]
-        # tmp solution for times normalization, should be done in preprocessing. See how R did it 
+        # tmp solution for times normalization, should be done in preprocessing. See how R did it
         times_numeric = (times_raw - times_raw[0]).astype('timedelta64[ms]').astype(np.float32)
         # NO NORNALIZATION: Convert milliseconds to minutes
         times = times_numeric / 60000  # 1 minute = 60,000 ms
