@@ -28,7 +28,7 @@ model/hyperparameter.heads = 2
 model/hyperparameter.dropout = 0.2
 model/hyperparameter.attn_dropout = 0.1
 model/hyperparameter.use_mask = False
-model/hyperparameter.prediction_head = @BinaryClassificationHead
+model/hyperparameter.prediction_head = @icu_benchmarks.models.dl_models.bat.BinaryClassificationHead
 model/hyperparameter.prediction_head_kwargs = {"num_classes": 2}
 model/hyperparameter.pooling = "max" # R had mean
 
