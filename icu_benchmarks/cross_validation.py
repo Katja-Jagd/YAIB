@@ -43,6 +43,7 @@ def execute_repeated_cv(
     subset_train_seed: int = 42, # ADDED FOR SUBSET
     task_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY TASK
     dataset_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY DATASET NAME
+    stop_after_first_fold: bool = False,
 ) -> float:
     """Preprocesses data and trains a model for each fold.
 
@@ -199,15 +200,14 @@ def execute_repeated_cv(
                 print(f"🔍 Subsetting training data to {subset_train_size} samples (seed={subset_train_seed})...")
                 print("\n\n\n")
 
-                # Define folder path for preprocessed (and potentially downsampled) data
-                dataset_name = os.path.basename(data_dir)
-                folder_path = (
-                    f"/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data/"
-                    f"{dataset_name}/{subset_train_size}_{subset_train_seed}"
-                )
-
-                os.makedirs(folder_path, exist_ok=True)
-
+                # Define path to save the preprocessed (and downsampled) data
+                REPO_ROOT = Path(__file__).resolve().parents[2] # Detect the YAIB repository root
+                subset_root = REPO_ROOT / "icu_benchmarks" / "data" / "preprocessed_data" # preprocessed subset root
+                ds_name = dataset_name if dataset_name else os.path.basename(data_dir) # Use dataset_name parameter if provided, otherwise fall back to data_dir basename
+                task_folder = task_name if task_name else "default_task" # Include task_name in path to organize by task
+                folder_path = subset_root / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
+                folder_path.mkdir(parents=True, exist_ok=True)
+                
                 # List of expected files for each split and key
                 expected_files = [
                     ("train", "OUTCOME"),
@@ -267,14 +267,6 @@ def execute_repeated_cv(
                     data["train"]["OUTCOME"] = downsampled_outcome
                     data["train"]["FEATURES"] = downsampled_features
 
-                # Define path to save the preprocessed (and downsampled) data
-                # Include task_name in path to organize by task
-                # Use dataset_name parameter if provided, otherwise fall back to data_dir basename
-                ds_name = dataset_name if dataset_name else os.path.basename(data_dir)
-                task_folder = task_name if task_name else "default_task"
-                folder_path = f"/isdata/winthergrp/gsn245/scratch/YAIB/icu_benchmarks/data/preprocessed_data/{task_folder}/{str(ds_name)}/{str(subset_train_size)}_{str(subset_train_seed)}"
-                os.makedirs(folder_path, exist_ok=True)
-
                 # Save all splits to disk
                 for split, split_data in data.items():
                     for key, df in split_data.items():
@@ -306,14 +298,12 @@ def execute_repeated_cv(
             )
             train_time = datetime.now() - start_time
 
-            # ------------  ADDED TO STOP AFTER X ROUNDS OF DATA LOADING ---------------- # 
+            
             # Stop after repetition 0 and fold 0
-            """
-            if repetition == 0 and fold_index == 0:
+            if stop_after_first_fold:
                 logging.info("Stopping after repetition 0, fold 0.")
                 return agg_loss
-            """
-            # ------------------------------------------------------------ # 
+            
             
             log_full_line(
                 f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
