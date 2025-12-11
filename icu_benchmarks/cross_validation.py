@@ -11,7 +11,7 @@ from icu_benchmarks.models.train import train_common
 from icu_benchmarks.models.utils import JsonResultLoggingEncoder
 from icu_benchmarks.run_utils import log_full_line
 from icu_benchmarks.constants import RunMode
-
+import polars as pl
 import os # Added to extract dataset name 
 
 @gin.configurable
@@ -92,13 +92,6 @@ def execute_repeated_cv(
         # Train model for each fold configuration (i.e, one fold is test fold and the rest are train/val folds)
         for fold_index in range(cv_folds_to_train):
 
-            # ------------  SPECIFY ONE FOLD AND REP TO USE FOR SUBSET TRAINING ---------------- # # the one with the lowest loss during pre-training
-            #rep_subset = 0
-            #fold_subset = 0
-            #if (repetition, fold_index) != (rep_subset, fold_subset):
-            #    continue
-            # ------------------------------------------------------------ #  
-
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,9 +113,6 @@ def execute_repeated_cv(
             )
 
             # Added function to save subsets used for fine-tuning experiment
-            import polars as pl
-            import os
-
             def downsample_preserving_balance(
                 df: pl.DataFrame,
                 label_col: str,
@@ -132,27 +122,131 @@ def execute_repeated_cv(
                 """
                 Downsample a Polars DataFrame to total_samples.
 
-                For classification (one row per stay): preserves class distribution.
-                For regression (multiple rows per stay): samples stays, not individual rows.
+                - Classification (one row per stay): preserves class distribution.
+                - AKI-style classification (multi-row, boolean label): preserves *stay-level* class distribution, sampling stays.
+                - Regression (multi-row, non-boolean label): samples stays, not individual rows.
                 """
                 # Check if this is a multi-row-per-stay scenario (regression with timesteps)
                 rows_per_stay = df.group_by("stay_id").len()
                 max_rows_per_stay = rows_per_stay.select(pl.col("len").max()).item()
 
+                is_boolean_label = (df.schema[label_col] == pl.Boolean)
+
+                # ============================
+                # CASE 1: Multi-row per stay + BOOLEAN label  → AKI classification
+                # ============================
+                if max_rows_per_stay > 1 and is_boolean_label:
+                    logging.info(
+                        f"Detected AKI classification task (max {max_rows_per_stay} rows/stay). "
+                        f"Sampling at stay level with label balance."
+                    )
+
+                    # 1) Compute stay-level label: True if any timestep is True, else False
+                    stay_level = (
+                        df
+                        .group_by("stay_id")
+                        .agg(pl.col(label_col).max().alias("stay_label"))
+                    )
+
+                    total_stays = stay_level.height
+                    if total_stays == 0:
+                        logging.warning("No stays found in AKI classification task; returning original df.")
+                        return df
+
+                    # We interpret total_samples as "number of stays to sample"
+                    n_stays_to_sample = min(total_samples, total_stays)
+
+                    # 2) Count how many stays per stay_label (True/False)
+                    labels = stay_level["stay_label"].unique().to_list()
+                    label_counts = {}
+                    total_original = 0
+
+                    for label in labels:
+                        count = stay_level.filter(pl.col("stay_label") == label).height
+                        label_counts[label] = count
+                        total_original += count
+
+                    # 3) Compute target number of sampled stays per label
+                    label_to_n_samples = {
+                        label: int(round((count / total_original) * n_stays_to_sample))
+                        for label, count in label_counts.items()
+                    }
+
+                    # 4) Sample per stay_label (with optional oversampling)
+                    samples = []
+                    for label, n_label in label_to_n_samples.items():
+                        df_label = stay_level.filter(pl.col("stay_label") == label)
+                        available = df_label.height
+
+                        with_replacement = available < n_label
+                        if with_replacement:
+                            n_duplicates = n_label - available
+                            logging.warning(
+                                f"[AKI] Oversampling stay_label={label}: "
+                                f"requested {n_label}, available {available}. "
+                                f"Sampling with replacement (≈ {n_duplicates} duplicated stays)."
+                            )
+
+                        sampled_stays = df_label.sample(
+                            n=n_label,
+                            with_replacement=with_replacement,
+                            seed=seed,
+                        )
+                        samples.append(sampled_stays)
+
+                    sampled_stay_level = pl.concat(samples)
+
+                    # 5) Extract chosen stay_ids and filter original df
+                    selected_stay_ids = (
+                        sampled_stay_level
+                        .select("stay_id")
+                        .to_series()
+                        .to_list()
+                    )
+
+                    result = df.filter(pl.col("stay_id").is_in(selected_stay_ids))
+
+                    logging.info(
+                        f"Sampled {len(selected_stay_ids)} stays "
+                        f"(AKI classification), resulting in {len(result)} total rows."
+                    )
+                    return result
+
+                # ============================
+                # CASE 2: Multi-row per stay + NON-boolean label → Regression
+                # ============================
                 if max_rows_per_stay > 1:
                     # Regression task: each stay has multiple timesteps
                     # Sample at the stay level to avoid row duplication bug
-                    logging.info(f"Detected regression task (max {max_rows_per_stay} rows/stay). Sampling at stay level.")
+                    logging.info(
+                        f"Detected regression task (max {max_rows_per_stay} rows/stay). "
+                        f"Sampling at stay level."
+                    )
                     unique_stays = df.select("stay_id").unique()
                     n_stays_to_sample = min(total_samples, len(unique_stays))
-                    sampled_stays = unique_stays.sample(n=n_stays_to_sample, with_replacement=False, seed=seed)
-                    selected_stay_ids = sampled_stays.select("stay_id").to_series().to_list()
+                    sampled_stays = unique_stays.sample(
+                        n=n_stays_to_sample,
+                        with_replacement=False,
+                        seed=seed
+                    )
+                    selected_stay_ids = (
+                        sampled_stays
+                        .select("stay_id")
+                        .to_series()
+                        .to_list()
+                    )
                     result = df.filter(pl.col("stay_id").is_in(selected_stay_ids))
-                    logging.info(f"Sampled {n_stays_to_sample} stays, resulting in {len(result)} total rows.")
+                    logging.info(
+                        f"Sampled {n_stays_to_sample} stays, resulting in {len(result)} total rows."
+                    )
                     return result
 
-                # Classification task: one row per stay, preserve class balance
-                logging.info(f"Detected classification task (1 row/stay). Preserving class balance.")
+                # ============================
+                # CASE 3: Single-row per stay → Standard classification
+                # ============================
+                logging.info(
+                    f"Detected classification task (1 row/stay). Preserving class balance."
+                )
 
                 # Step 1: Count classes
                 labels = df[label_col].unique().to_list()
@@ -170,13 +264,26 @@ def execute_repeated_cv(
                     for label, count in label_counts.items()
                 }
 
-                # Step 3: Sample per class
+                # Step 3: Sample per class (with optional oversampling)
                 samples = []
                 for label, n_label in label_to_n_samples.items():
                     df_label = df.filter(pl.col(label_col) == label)
-                    if len(df_label) < n_label:
-                        raise ValueError(f"Not enough data for label {label}: requested {n_label}, found {len(df_label)}")
-                    sampled = df_label.sample(n=n_label, with_replacement=False, seed=seed)
+                    available = len(df_label)
+
+                    with_replacement = available < n_label
+                    if with_replacement:
+                        n_duplicates = n_label - available
+                        logging.warning(
+                            f"[CLS] Oversampling label={label}: "
+                            f"requested {n_label}, available {available}. "
+                            f"Sampling with replacement (≈ {n_duplicates} duplicated rows)."
+                        )
+
+                    sampled = df_label.sample(
+                        n=n_label,
+                        with_replacement=with_replacement,
+                        seed=seed,
+                    )
                     samples.append(sampled)
 
                 # Step 4: Combine and shuffle
@@ -190,7 +297,12 @@ def execute_repeated_cv(
                 )
                 combined = original_order.join(combined, on="stay_id", how="left")
 
-                return combined.sample(n=len(combined), with_replacement=False, seed=seed)
+                return combined.sample(
+                    n=len(combined),
+                    with_replacement=False,
+                    seed=seed,
+                )
+
 
             # ======================= #
             # Perform downsampling if enabled
@@ -202,7 +314,7 @@ def execute_repeated_cv(
 
                 # Define path to save the preprocessed (and downsampled) data
                 REPO_ROOT = Path(__file__).resolve().parents[2] # Detect the YAIB repository root
-                subset_root = REPO_ROOT / "icu_benchmarks" / "data" / "preprocessed_data" # preprocessed subset root
+                subset_root = REPO_ROOT / "YAIB" / "icu_benchmarks" / "data" / "preprocessed_data" # preprocessed subset root
                 ds_name = dataset_name if dataset_name else os.path.basename(data_dir) # Use dataset_name parameter if provided, otherwise fall back to data_dir basename
                 task_folder = task_name if task_name else "default_task" # Include task_name in path to organize by task
                 folder_path = subset_root / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
@@ -227,7 +339,7 @@ def execute_repeated_cv(
                         break
 
                 # ---------------------------------------------------
-                # CASE 1: Files already exist → load them and skip processing
+                # Files already exist → load them and skip processing
                 # ---------------------------------------------------
                 if all_exist:
                     print(f"✅ Preprocessed subset already exists. Loading from:\n  {folder_path}")
@@ -244,7 +356,7 @@ def execute_repeated_cv(
                     print("\n✅ DONE — Using cached preprocessed subset.\n")
 
                 # ---------------------------------------------------
-                # CASE 2: Files do NOT exist → perform downsampling and save
+                # Files do NOT exist → perform downsampling and save
                 # ---------------------------------------------------
                 else:
                     print("⚠️ Subset data does not exist — performing downsampling...")
@@ -304,7 +416,6 @@ def execute_repeated_cv(
                 logging.info("Stopping after repetition 0, fold 0.")
                 return agg_loss
             
-            
             log_full_line(
                 f"FINISHED FOLD {fold_index}| PREPROCESSING DURATION {preprocess_time}| PROCEDURE DURATION {train_time}",
                 level=logging.INFO,
@@ -323,4 +434,3 @@ def execute_repeated_cv(
         log_full_line(f"FINISHED CV REPETITION {repetition}", level=logging.INFO, char="=", num_newlines=3)
 
     return agg_loss / (cv_repetitions_to_train * cv_folds_to_train)
-
