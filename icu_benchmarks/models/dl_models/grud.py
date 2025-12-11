@@ -6,7 +6,7 @@ import torch.jit as jit
 from typing import List
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper, ImputationWrapper
-from icu_benchmarks.models.dl_models.bat import ForecastingHead
+from icu_benchmarks.models.dl_models.bat import ForecastingHead, BinaryClassificationHead, RegressionHead
 
 
 def masked_mean_pooling(datatensor, mask):
@@ -82,7 +82,7 @@ class GRUDCell(jit.ScriptModule):
     def get_rdropout_mask_for_cell(
         self, inputs, dropout_prob: float, training: bool, num_units: int, count: int
     ):
-        if not self.recurrent_dropout_masks[0].numel() == 1:
+        if self.recurrent_dropout_masks[0].numel() == 1:
             return self.recurrent_dropout_masks
         else:
             return generate_masks(inputs, dropout_prob, training, num_units, count)
@@ -90,7 +90,7 @@ class GRUDCell(jit.ScriptModule):
     def get_mdropout_mask_for_cell(
         self, inputs, dropout_prob: float, training: bool, num_units: int, count: int
     ):
-        if not self.feed_dropout_masks[0].numel() == 1:
+        if self.feed_dropout_masks[0].numel() == 1:
             return self.feed_dropout_masks
         else:
             return generate_masks(inputs, dropout_prob, training, num_units, count)
@@ -129,8 +129,8 @@ class GRUDCell(jit.ScriptModule):
         self.use_decay_bias = use_decay_bias
         self.feed_masking = feed_masking
         self.masking_decay = get_activation(masking_decay)
-        self.dropout = dropout
-        self.recurrent_dropout = recurrent_dropout
+        self.dropout = float(dropout)
+        self.recurrent_dropout = float(recurrent_dropout)
 
         self.use_input_decay: bool = bool(input_decay)
         self.use_hidden_decay: bool = bool(hidden_decay)
@@ -314,7 +314,9 @@ class GRUDCell(jit.ScriptModule):
             z_t += F.linear(m_z, self.masking_kernel_z)
             r_t += F.linear(m_r, self.masking_kernel_r)
             hh_t += F.linear(m_h, self.masking_kernel_h)
-        if self.use_bias:
+        else:
+            # When feed_masking is False, add bias here
+            # This ensures bias is only added once, not in addition to masking kernels
             z_t = z_t + self.bias_z
             r_t = r_t + self.bias_r
             hh_t = hh_t + self.bias_h
@@ -366,26 +368,6 @@ class GRUD(jit.ScriptModule):
 
 
 # Prediction head classes
-@gin.configurable
-class BinaryClassificationHead(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, num_classes)
-
-    def forward(self, x):
-        return self.linear(x)
-
-
-@gin.configurable
-class RegressionHead(nn.Module):
-    def __init__(self, input_dim, output_dim=1):
-        super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-
-    def forward(self, x):
-        return self.linear(x).squeeze(-1)
-
-
 # Encoder class
 @gin.configurable
 class GRUDEncoder(nn.Module):
@@ -577,8 +559,6 @@ class GRUDModel(CustomDLPredictionWrapper):
             prediction_head=prediction_head,
             prediction_head_kwargs=prediction_head_kwargs,
         )
-
-        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
