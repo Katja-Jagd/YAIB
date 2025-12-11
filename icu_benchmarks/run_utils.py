@@ -28,6 +28,7 @@ TASK_TO_GIN_MAPPING = {
     # Regression tasks
     "KidneyFunction": "Regression",
     "LengthOfStay": "LengthOfStay",  # Has its own specialized gin
+    "LOS": "LengthOfStay",  # Has its own specialized gin
     # Imputation
     "Imputation": "DatasetImputation",
     # Allow direct gin file names for backwards compatibility
