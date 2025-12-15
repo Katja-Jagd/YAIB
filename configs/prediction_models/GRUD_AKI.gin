@@ -1,0 +1,50 @@
+# Settings for GRU-D (Gated Recurrent Unit with Decay) for AKI prediction
+# AKI requires timestep-level predictions (hourly within 6H window)
+# Uses TimeseriesClassificationHead instead of BinaryClassificationHead
+
+# Common settings for DL models
+include "configs/prediction_models/common/DLCommon.gin"
+
+# Dataloader - use BATPolarsDataset for consistency with other timestep tasks
+train_common.dataset_class = @BATPolarsDataset
+BATPolarsDataset.runmode = "classification"
+
+# Train params
+train_common.model = @GRUDEncoderPrediction
+train_common.num_workers = 0
+train_common.verbose = True
+train_common.cpu = False
+
+# Optimizer params
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = (1e-5, 1e-3)
+
+# GRUD Encoder - produces per-timestep representations (no pooling!)
+GRUDEncoderPrediction.encoder_class = @GRUDEncoder
+GRUDEncoderPrediction.prediction_head = @TimeseriesClassificationHead
+GRUDEncoderPrediction.prediction_head_kwargs = {"num_classes": 2}
+
+# GRUDEncoder hyperparameters
+model/hyperparameter.class_to_tune = @GRUDEncoder
+model/hyperparameter.recurrent_n_units = (64, 256, "log")
+model/hyperparameter.dropout = (0.2, 0.4)
+model/hyperparameter.recurrent_dropout = (0.2, 0.4)
+model/hyperparameter.use_static = True
+model/hyperparameter.obs_strategy = "both"
+
+# Training parameters
+train_common.epochs = 100
+train_common.batch_size = 64
+train_common.patience = 5
+train_common.min_delta = 1e-4
+
+# Hyperparameter tuning
+tune_hyperparameters.scopes = ["model", "optimizer"]
+tune_hyperparameters.n_initial_points = 5
+tune_hyperparameters.n_calls = 10
+tune_hyperparameters.folds_to_tune_on = 3
+
+# CV params
+execute_repeated_cv.cv_repetitions = 1
+execute_repeated_cv.cv_folds = 5
