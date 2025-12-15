@@ -146,4 +146,6 @@ preprocessed_data/
 
 # Ignore fine-tuning results
 finetuning_results/*
-icu_benchmarks/tuning/hp_tuning_results/*
+icu_benchmarks/tuning/hp_tuning_results/
+
+DELETE*
