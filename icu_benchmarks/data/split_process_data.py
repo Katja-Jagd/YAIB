@@ -411,7 +411,7 @@ def make_single_split(
         if train_size:
             outer_cv = StratifiedShuffleSplit(cv_repetitions, train_size=train_size)
         else:
-            outer_cv = StratifiedKFold(cv_repetitions, shuffle=True, random_state=seed)
+            outer_cv = StratifiedKFold(cv_folds, shuffle=True, random_state=seed)
         inner_cv = StratifiedKFold(cv_folds, shuffle=True, random_state=seed)
 
         dev, test = list(outer_cv.split(stays, labels))[repetition_index]
@@ -426,7 +426,7 @@ def make_single_split(
         if train_size:
             outer_cv = ShuffleSplit(cv_repetitions, train_size=train_size)
         else:
-            outer_cv = KFold(cv_repetitions, shuffle=True, random_state=seed)
+            outer_cv = KFold(cv_folds, shuffle=True, random_state=seed)
         inner_cv = KFold(cv_folds, shuffle=True, random_state=seed)
 
         dev, test = list(outer_cv.split(stays))[repetition_index]
