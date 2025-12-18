@@ -76,6 +76,7 @@ def build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Framework for benchmarking ML/DL models on ICU data")
 
     parser.add_argument("-d", "--data-dir", required=True, type=Path, help="Path to the parquet data directory.")
+    parser.add_argument("-pd", "--prepro-dir", required=False, type=Path, default = None, help="Path to the preprocessed data directory for subsets.")
     parser.add_argument(
         "-t",
         "--task",
@@ -611,6 +612,7 @@ def downsample_outcome_by_task(
     subset_size: int,
     subset_seed: int,
 ) -> pl.DataFrame:
+
     if task_name == "Mortality24":
         return downsample_binary_classification(
             df=df_outcome,
@@ -625,7 +627,7 @@ def downsample_outcome_by_task(
             total_stays=subset_size,
             seed=subset_seed,
         )
-    elif task_name == "LOS":
+    elif task_name in ("LOS", "LengthOfStay"):
         return downsample_los_regression(
             df=df_outcome,
             total_stays=subset_size,
