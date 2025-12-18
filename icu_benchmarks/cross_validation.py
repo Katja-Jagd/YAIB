@@ -18,12 +18,14 @@ from icu_benchmarks.constants import RunMode
 import polars as pl
 import logging
 from typing import Optional
-
 import os # Added to extract dataset name 
+
+import polars as pl
 
 @gin.configurable
 def execute_repeated_cv(
     data_dir: Path,
+    prepro_dir: Path, 
     log_dir: Path,
     seed: int,
     eval_only: bool = False,
@@ -59,6 +61,7 @@ def execute_repeated_cv(
         complete_train: Use the full data for training instead of held out test splits.
         wandb: Use wandb for logging.
         data_dir: Path to the data directory.
+        prepro_dir: Path to preprocessed data directory.
         log_dir: Path to the log directory.
         seed: Random seed.
         eval_only: Whether to only evaluate the model.
@@ -102,22 +105,6 @@ def execute_repeated_cv(
             repetition_fold_dir = log_dir / f"repetition_{repetition}" / f"fold_{fold_index}"
             repetition_fold_dir.mkdir(parents=True, exist_ok=True)
 
-            start_time = datetime.now()
-            data = preprocess_data(
-                data_dir,
-                seed=seed,
-                debug=debug,
-                load_cache=load_cache,
-                generate_cache=generate_cache,
-                cv_repetitions=cv_repetitions,
-                repetition_index=repetition,
-                train_size=train_size,
-                cv_folds=cv_folds,
-                fold_index=fold_index,
-                pretrained_imputation_model=pretrained_imputation_model,
-                runmode=mode,
-                complete_train=complete_train,
-            )
             # ======================= #
             # Perform downsampling if enabled
             # ======================= #
@@ -128,11 +115,10 @@ def execute_repeated_cv(
                 print("\n\n\n")
 
                 # Define path to save the preprocessed (and downsampled) data
-                REPO_ROOT = Path(__file__).resolve().parents[2]  # Detect the YAIB repository root
-                subset_root = REPO_ROOT / "YAIB" / "icu_benchmarks" / "data" / "preprocessed_data"
+                pp_dir = prepro_dir 
                 ds_name = dataset_name if dataset_name else os.path.basename(data_dir)
                 task_folder = task_name if task_name else "default_task"
-                folder_path = subset_root / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
+                folder_path = pp_dir / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
                 folder_path.mkdir(parents=True, exist_ok=True)
 
                 expected_files = [
@@ -156,6 +142,7 @@ def execute_repeated_cv(
                 # Files already exist → load them and skip processing
                 # ---------------------------------------------------
                 if all_exist:
+                    data = {split: {} for split in ("train", "val", "test")}
                     print(f"✅ Preprocessed subset already exists. Loading from:\n  {folder_path}")
 
                     for split, key in expected_files:
@@ -173,6 +160,24 @@ def execute_repeated_cv(
                 # Files do NOT exist → perform downsampling and save
                 # ---------------------------------------------------
                 else:
+                    start_time = datetime.now()
+                    data = preprocess_data(
+                        data_dir,
+                        seed=seed,
+                        debug=debug,
+                        load_cache=load_cache,
+                        generate_cache=generate_cache,
+                        cv_repetitions=cv_repetitions,
+                        repetition_index=repetition,
+                        train_size=train_size,
+                        cv_folds=cv_folds,
+                        fold_index=fold_index,
+                        pretrained_imputation_model=pretrained_imputation_model,
+                        runmode=mode,
+                        complete_train=complete_train,
+                    )
+                    preprocess_time = datetime.now() - start_time
+
                     print("⚠️ Subset data does not exist — performing downsampling...")
 
                     original_train_outcome = data["train"]["OUTCOME"]
@@ -224,7 +229,6 @@ def execute_repeated_cv(
                     if downsampled_features.height == 0:
                         raise RuntimeError("FEATURES join produced 0 rows — check stay_id base/shift logic.")
 
-
                     # Replace train split
                     data["train"]["OUTCOME"] = downsampled_outcome
                     data["train"]["FEATURES"] = downsampled_features
@@ -242,8 +246,25 @@ def execute_repeated_cv(
                     print(f"\n✅ PREPROCESSED DATA SAVED to: {folder_path}\n")
 
             # ======================= #
-
-            preprocess_time = datetime.now() - start_time
+            else:
+                start_time = datetime.now()
+                data = preprocess_data(
+                    data_dir,
+                    seed=seed,
+                    debug=debug,
+                    load_cache=load_cache,
+                    generate_cache=generate_cache,
+                    cv_repetitions=cv_repetitions,
+                    repetition_index=repetition,
+                    train_size=train_size,
+                    cv_folds=cv_folds,
+                    fold_index=fold_index,
+                    pretrained_imputation_model=pretrained_imputation_model,
+                    runmode=mode,
+                    complete_train=complete_train,
+                )
+                preprocess_time = datetime.now() - start_time
+            
             start_time = datetime.now()
             agg_loss += train_common(
                 data,
