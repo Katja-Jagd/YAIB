@@ -53,8 +53,8 @@ def set_seeds(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-def load_subset(dataset, size, seed, subset_root):
-    path = Path(subset_root) / dataset / f"{size}_{seed}"
+def load_subset(dataset, task, size, seed, subset_root):
+    path = Path(subset_root) / task / dataset / f"{size}_{seed}"
     data = {}
     for split in ["train", "val", "test"]:
         o = path / f"{split}_OUTCOME.parquet"
@@ -98,7 +98,7 @@ def load_pretrained_model(ckpt_path):
 # Training + Validation + Testing
 # ----------------------------------------------------
 def run_single_experiment(
-    dataset, size, seed, model_path, lr, batch_size, fine_tune_head, num_epochs, subset_root
+    dataset, task, size, seed, model_path, lr, batch_size, fine_tune_head, num_epochs, subset_root
 ):
     # ------------------------------------------------
     # EXACT SAME SEEDING BEHAVIOR AS SCRIPT 2
@@ -106,7 +106,7 @@ def run_single_experiment(
     set_seeds(42)
 
     # load dataset
-    data = load_subset(dataset, size, seed, subset_root)
+    data = load_subset(dataset, task, size, seed, subset_root)
     train_set, val_set, test_set = build_datasets(data)
 
     g = torch.Generator().manual_seed(42)
@@ -261,6 +261,7 @@ def run_single_experiment(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--task", required=True, type=str, default='Mortality24')
     parser.add_argument("--size", type=int, required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lrs", nargs="+", type=float, required=True)
@@ -276,6 +277,7 @@ if __name__ == "__main__":
         print(f"\n=== Running LR = {lr} === Dataset = {args.dataset} === Seed = {args.seed} === Size = {args.size} ===")
         res = run_single_experiment(
             dataset=args.dataset,
+            task=args.task,
             size=args.size,
             seed=args.seed,
             model_path=args.model_path,
@@ -289,6 +291,7 @@ if __name__ == "__main__":
         res["Size"] = args.size
         res["Fine_tune_head"] = args.fine_tune_head
         results.append(res)
+        print(res)
 
     print("\n=== Summary ===")
     for r in results:
