@@ -675,7 +675,13 @@ class CustomDLPredictionWrapper(DLWrapper):
         data, mask, label, times, static, delta, obs_mask
         Only the first 5 tensors are used by the current model.
         """
-        data, mask, label, times, static, *_ = batch  # Ignore delta, obs_mask for now
+
+        data, mask, label, times, static, *rest = batch
+
+        obs_mask = None
+        if len(rest) >= 2:
+            # assuming (delta, obs_mask)
+            obs_mask = rest[-1]
 
         data = data.to(self.device).float()
         mask = mask.to(self.device).float()
@@ -687,23 +693,56 @@ class CustomDLPredictionWrapper(DLWrapper):
         output = self(data, static=static, time=times, sensor_mask=mask)
 
         # Loss computation
-        if self.run_mode == RunMode.classification:
-            loss = self.loss(output, label.squeeze().long())  # CrossEntropyLoss
-        elif self.run_mode == RunMode.regression:
-            loss = self.loss(output.squeeze(), label.float())
-        else:
-            raise ValueError("Unsupported run mode.")
+        if self.run_mode == RunMode.regression:
+            # output: (B, T) or (B, T, 1) or (B,) depending on model
+            output = output.squeeze()
 
-        # Metric updates
-        transformed_output = self.output_transform((output, label))
-        for key, metric in self.metrics[step_prefix].items():
-            if isinstance(metric, torchmetrics.Metric):
-                # Most torchmetrics metrics (Accuracy, AUROC, etc.)
-                metric.update(*transformed_output)
+            # If this is per-timestep regression, label is (B, T)
+            # Use obs_mask (B, T) to flatten valid timesteps into 1D
+            if obs_mask is not None and output.ndim == 2 and label.ndim == 2:
+                obs_mask = obs_mask.to(self.device).bool()
+                pred = output[obs_mask]          # (num_valid,)
+                target = label.float()[obs_mask] # (num_valid,)
+
+                
+                # [DEBUG]
+                # --- DEBUG: inspect predictions in real LOS units ---
+                if step_prefix in ("test"):
+                    LOS_MAX_HOURS = 336.0  # or 336.0 — must match gin
+
+                    print("\n[DEBUG] LOS sanity check (first batch only)")
+                    print("  pred (scaled)  :", pred[:10].detach().cpu().tolist())
+                    print("  target (scaled):", target[:10].detach().cpu().tolist())
+                    print("  pred (hours)   :", (pred[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
+                    print("  target (hours) :", (target[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
+
+                    self._printed_los_debug = True
+                # [DEBUG]
+
             else:
-                # Ignite's EpochMetric expects a single tuple
-                metric.update(transformed_output)
+                # fallback for sequence-level regression
+                pred = output.reshape(-1)
+                target = label.float().reshape(-1)
 
+            loss = self.loss(pred, target)
+
+            # IMPORTANT: update metrics with 1D tensors so concatenation works
+            transformed_output = (pred.detach(), target.detach())
+            for key, metric in self.metrics[step_prefix].items():
+                if isinstance(metric, torchmetrics.Metric):
+                    metric.update(*transformed_output)
+                else:
+                    metric.update(transformed_output)
+
+        else:
+            # your existing classification logic (unchanged)
+            loss = self.loss(output, label.squeeze().long())
+            transformed_output = self.output_transform((output, label))
+            for key, metric in self.metrics[step_prefix].items():
+                if isinstance(metric, torchmetrics.Metric):
+                    metric.update(*transformed_output)
+                else:
+                    metric.update(transformed_output)
 
         self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
