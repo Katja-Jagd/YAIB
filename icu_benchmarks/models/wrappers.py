@@ -707,16 +707,16 @@ class CustomDLPredictionWrapper(DLWrapper):
                 
                 # [DEBUG]
                 # --- DEBUG: inspect predictions in real LOS units ---
-                if step_prefix in ("test"):
-                    LOS_MAX_HOURS = 336.0  # or 336.0 — must match gin
-
-                    print("\n[DEBUG] LOS sanity check (first batch only)")
-                    print("  pred (scaled)  :", pred[:10].detach().cpu().tolist())
-                    print("  target (scaled):", target[:10].detach().cpu().tolist())
-                    print("  pred (hours)   :", (pred[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
-                    print("  target (hours) :", (target[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
-
-                    self._printed_los_debug = True
+                #if step_prefix in ("test"):
+                #    LOS_MAX_HOURS = 336.0  # or 336.0 — must match gin
+                #
+                #    print("\n[DEBUG] LOS sanity check (first batch only)")
+                #    print("  pred (scaled)  :", pred[:10].detach().cpu().tolist())
+                #    print("  target (scaled):", target[:10].detach().cpu().tolist())
+                #    print("  pred (hours)   :", (pred[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
+                #    print("  target (hours) :", (target[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
+                #
+                #    self._printed_los_debug = True
                 # [DEBUG]
 
             else:
