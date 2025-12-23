@@ -341,6 +341,54 @@ class DLPredictionWrapper(DLWrapper):
         prediction = torch.masked_select(out, mask.unsqueeze(-1)).reshape(-1, out.shape[-1]).to(self.device)
         target = torch.masked_select(labels, mask).to(self.device)
 
+        # [DEBUG] Print prediction and label information for first few batches
+        if hasattr(self, '_debug_batch_count'):
+            self._debug_batch_count[step_prefix] = self._debug_batch_count.get(step_prefix, 0) + 1
+        else:
+            self._debug_batch_count = {step_prefix: 1}
+
+        if self._debug_batch_count[step_prefix] <= 3:
+            """
+            print(f"\n{'='*80}")
+            print(f"[DEBUG {step_prefix.upper()}] Batch {self._debug_batch_count[step_prefix]}")
+            print(f"{'='*80}")
+            print(f"\n🔍 PREDICTION STRUCTURE:")
+            print(f"   Raw model output shape: {out.shape}")
+            if len(out.shape) == 3:
+                print(f"   → (batch={out.shape[0]}, timesteps={out.shape[1]}, classes={out.shape[2]})")
+                print(f"   → Model makes predictions at EVERY timestep!")
+            print(f"\n   Mask shape: {mask.shape}")
+            if len(mask.shape) == 2:
+                print(f"   → (batch={mask.shape[0]}, timesteps={mask.shape[1]})")
+                print(f"   → Mask determines which timesteps are valid/used")
+                print(f"   → Number of True values in mask (valid predictions): {mask.sum().item()}")
+            print(f"\n   After masking:")
+            print(f"   Prediction shape: {prediction.shape} ({prediction.shape[0]} total predictions)")
+            print(f"   Target shape: {target.shape} ({target.shape[0]} total labels)")
+            print(f"   → These are FLATTENED: all valid timesteps from all patients in batch")
+
+            print(f"\n📊 SAMPLE DATA (first patient's valid timesteps):")
+            # Calculate how many timesteps for first patient
+            first_patient_mask = mask[0]
+            n_valid = first_patient_mask.sum().item()
+            print(f"   First patient has {n_valid} valid timesteps (out of {len(first_patient_mask)} total)")
+
+            print(f"\n   First 5 predictions (logits):")
+            print(f"   {prediction[:5]}")
+            print(f"\n   First 5 targets:")
+            print(f"   {target[:5]}")
+            if prediction.shape[-1] > 1:
+                # For classification, show softmax probabilities
+                probs = torch.softmax(prediction, dim=1)
+                print(f"\n   First 5 predictions (probabilities):")
+                print(f"   {probs[:5]}")
+                print(f"\n   Predicted classes (argmax): {torch.argmax(probs[:5], dim=1)}")
+                print(f"\n   Label distribution in batch:")
+                print(f"   Class 0: {(target == 0).sum().item()} ({100*(target == 0).sum().item()/len(target):.1f}%)")
+                print(f"   Class 1: {(target == 1).sum().item()} ({100*(target == 1).sum().item()/len(target):.1f}%)")
+            print(f"{'='*80}\n")
+            """
+
         if prediction.shape[-1] > 1 and self.run_mode == RunMode.classification:
             # Classification task
             loss = self.loss(prediction, target.long(), weight=self.loss_weights.to(self.device)) + aux_loss
@@ -686,10 +734,52 @@ class CustomDLPredictionWrapper(DLWrapper):
         # Forward pass — assumes model accepts named args like in your notebook
         output = self(data, static=static, time=times, sensor_mask=mask)
 
+        # [DEBUG] Print prediction and label information for first few batches
+        if hasattr(self, '_debug_batch_count'):
+            self._debug_batch_count[step_prefix] = self._debug_batch_count.get(step_prefix, 0) + 1
+        else:
+            self._debug_batch_count = {step_prefix: 1}
+
+        """
+        if self._debug_batch_count[step_prefix] <= 3:
+            print(f"\n{'='*80}")
+            print(f"[DEBUG {step_prefix.upper()} - CustomDLPredictionWrapper] Batch {self._debug_batch_count[step_prefix]}")
+            print(f"{'='*80}")
+            print(f"Data shape: {data.shape}")
+            print(f"Mask shape: {mask.shape}")
+            print(f"Times shape: {times.shape}")
+            print(f"Static shape: {static.shape}")
+            print(f"Label shape: {label.shape}")
+            print(f"Output shape: {output.shape}")
+            print(f"\nFirst 5 outputs (logits):")
+            print(output[:5])
+            print(f"\nFirst 5 labels:")
+            print(label[:5])
+            if self.run_mode == RunMode.classification and output.shape[-1] > 1:
+                # For classification, show softmax probabilities
+                probs = torch.softmax(output, dim=1)
+                print(f"\nFirst 5 predictions (probabilities):")
+                print(probs[:5])
+                print(f"\nPredicted classes (argmax):")
+                print(torch.argmax(probs[:5], dim=1))
+            elif self.run_mode == RunMode.regression:
+                print(f"\nFirst 5 predictions (regression):")
+                print(output[:5])
+            print(f"{'='*80}\n")
+        """
+
         # Loss computation
         if self.run_mode == RunMode.classification:
+            if output.ndim == 3:
+                # Flatten time dimension (1)
+                output = output.reshape(-1, output.shape[-1])
+                label = label.reshape(-1)
             loss = self.loss(output, label.squeeze().long())  # CrossEntropyLoss
         elif self.run_mode == RunMode.regression:
+            # For regression tasks like LengthOfStay: label has shape (batch, timesteps)
+            # All timesteps have the same value, so take the first timestep
+            if label.dim() > 1:
+                label = label[:, 0]
             loss = self.loss(output.squeeze(), label.float())
         else:
             raise ValueError("Unsupported run mode.")

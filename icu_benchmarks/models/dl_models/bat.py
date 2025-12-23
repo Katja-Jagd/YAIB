@@ -807,19 +807,38 @@ class BAT(CustomDLPredictionWrapper):
         static_count = kwargs.get("static_count", 4)  # fallback if static shape isn't passed
 
         # Instantiate encoder
-        encoder = EncoderClassifierCrossParallel(
-            device=self.device,
-            pooling="max",
-            value_embed_size=value_embed_size,
-            layers=layers,
-            heads=heads,
-            dropout=dropout,
-            attn_dropout=attn_dropout,
-            use_mask=use_mask,
-            sensors_count=sensors_count,
-            max_timepoint_count=max_timepoint_count,
-            static_count=static_count,
-        )
+        try:
+            skip_pooling = gin.query_parameter("%TIMESTEP_LEVEL_PREDICTIONS")
+        except Exception:
+            skip_pooling = False
+
+        if skip_pooling:
+            encoder = AutoregressiveEncoderCrossParallel(
+                device=self.device,
+                value_embed_size=value_embed_size,
+                layers=layers,
+                heads=heads,
+                dropout=dropout,
+                attn_dropout=attn_dropout,
+                use_mask=use_mask,
+                sensors_count=sensors_count,
+                max_timepoint_count=max_timepoint_count,
+                static_count=static_count,     
+            )   
+        else:
+            encoder = EncoderClassifierCrossParallel(
+                device=self.device,
+                pooling="max",
+                value_embed_size=value_embed_size,
+                layers=layers,
+                heads=heads,
+                dropout=dropout,
+                attn_dropout=attn_dropout,
+                use_mask=use_mask,
+                sensors_count=sensors_count,
+                max_timepoint_count=max_timepoint_count,
+                static_count=static_count,
+            )
 
         # Compose full prediction model
         self.model = EncoderPrediction(
