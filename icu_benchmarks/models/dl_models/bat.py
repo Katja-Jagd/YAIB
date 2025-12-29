@@ -27,7 +27,9 @@ class RegressionHead(nn.Module):
         self.linear = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
-        return self.linear(x).squeeze(-1)
+        # x: (N, T, E)
+        y = self.linear(x)  # (N, T, output_dim)
+        return y.squeeze(-1) if y.shape[-1] == 1 else y
 
 @gin.configurable
 class TimeseriesClassificationHead(nn.Module):
@@ -957,4 +959,74 @@ class AutoregressiveBAT(CustomDLPredictionWrapper):
             Tensor of shape (N, T, num_classes) for classification
             or (N, T) for regression
         """
+        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
+    
+
+
+@gin.configurable
+class BATRegression(CustomDLPredictionWrapper):
+    """
+    Autoregressive BAT for per-timestep regression.
+    Encoder is causal (pred at t depends only on <= t), head outputs a scalar per timestep.
+
+    Output:
+      y_hat: (N, T)  if output_dim=1 (default)
+            (N, T, D) if output_dim>1
+    """
+
+    _supported_run_modes = [RunMode.regression]
+
+    def __init__(
+        self,
+        input_size,
+        value_embed_size,
+        layers,
+        heads,
+        dropout,
+        attn_dropout,
+        use_mask,
+        prediction_head=RegressionHead,
+        prediction_head_kwargs=None,          # e.g. {"output_dim": 1}
+        lr=1e-4,
+        optimizer=torch.optim.Adam,
+        *args,
+        **kwargs
+    ):
+        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
+        self.save_hyperparameters()
+
+        if prediction_head_kwargs is None:
+            prediction_head_kwargs = {"output_dim": 1}
+
+        # Extract dimensions from dataset
+        sensors_count = input_size[1]
+        max_timepoint_count = input_size[2]
+        static_count = kwargs.get("static_count", 4)  # fallback if not passed
+
+        # Autoregressive (causal) encoder
+        encoder = AutoregressiveEncoderCrossParallel(
+            device=self.device,
+            value_embed_size=value_embed_size,
+            layers=layers,
+            heads=heads,
+            dropout=dropout,
+            attn_dropout=attn_dropout,
+            use_mask=use_mask,
+            sensors_count=sensors_count,
+            max_timepoint_count=max_timepoint_count,
+            static_count=static_count,
+        )
+
+        # Full model = encoder + regression head
+        self.model = EncoderPrediction(
+            encoder_class=encoder,
+            prediction_head=prediction_head,
+            prediction_head_kwargs=prediction_head_kwargs,
+        )
+
+        # Some wrappers/metric code paths may look for `.logit`.
+        # For regression it typically isn't used, but we keep a harmless placeholder.
+        self.logit = nn.Identity()
+
+    def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)

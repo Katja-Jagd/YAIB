@@ -44,6 +44,7 @@ def main(my_args=tuple(sys.argv[1:])):
     setup_logging(date_format, log_format, verbose)
     # Get arguments
     data_dir = Path(args.data_dir)
+    prepro_dir = Path(args.prepro_dir) if args.prepro_dir is not None else None
     name = args.name
     task_input = args.task
     model = args.model
@@ -190,6 +191,7 @@ def main(my_args=tuple(sys.argv[1:])):
     start_time = datetime.now()
     execute_repeated_cv(
         data_dir,
+        prepro_dir,
         run_dir,
         args.seed,
         eval_only=evaluate,
