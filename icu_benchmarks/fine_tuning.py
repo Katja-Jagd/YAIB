@@ -149,7 +149,7 @@ def build_model_from_ckpt(ckpt_path: Path, task: str = "Mortality24") -> Encoder
         EncoderPrediction model with appropriate head
     """
     # Define which tasks require timestep-level predictions
-    TIMESTEP_TASKS = {"Sepsis"}  # Add others as needed: "AKI" if it's also timestep-level
+    TIMESTEP_TASKS = {"Sepsis", "AKI"}  # Tasks with hourly predictions within a time window
 
     ckpt = torch.load(ckpt_path, map_location="cpu")
     hparams = ckpt.get("hyper_parameters", {})

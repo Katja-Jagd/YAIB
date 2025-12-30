@@ -473,6 +473,8 @@ class GRUDEncoder(nn.Module):
             pooled = masked_max_pooling(grud_output, time_mask)
         elif self.pooling == "mean":
             pooled = masked_mean_pooling(grud_output, time_mask)
+        elif self.pooling == None or self.pooling.lower() == "none":
+            pooled = grud_output
         else:
             raise NotImplementedError(f"Pooling function {self.pooling} not supported.")
 
@@ -499,11 +501,6 @@ class GRUDEncoderPrediction(nn.Module):
 
     def forward(self, x, static, time, sensor_mask):
         features = self.encoder_class(x, static, time, sensor_mask)
-
-        if features.shape[1] != self.input_dim:
-            raise ValueError(
-                f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
-            )
 
         return self.head(features)
 
@@ -542,6 +539,14 @@ class GRUDModel(CustomDLPredictionWrapper):
         sensors_count = input_size[1]
         max_timepoint_count = input_size[2]
         static_count = kwargs.get("static_count", 4)
+
+        try:
+            skip_pooling = gin.query_parameter("%TIMESTEP_LEVEL_PREDICTIONS")
+        except Exception:
+            skip_pooling = False
+
+        if skip_pooling:
+            pooling = None
 
         encoder = GRUDEncoder(
             device=self.device,

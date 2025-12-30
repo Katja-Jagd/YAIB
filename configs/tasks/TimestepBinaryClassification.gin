@@ -1,0 +1,31 @@
+# COMMON IMPORTS
+include "configs/tasks/common/Imports.gin"
+
+# DATASET CONFIGURATION
+include "configs/tasks/common/PredictionTaskVariables.gin"
+
+# CROSS-VALIDATION
+include "configs/tasks/common/CrossValidation.gin"
+
+# MODE SETTINGS
+Run.mode = "Classification"
+NUM_CLASSES = 2 # Binary classification
+HORIZON = 24
+train_common.weight = "balanced"
+train_common.ram_cache = True
+
+# DEEP LEARNING
+DLPredictionWrapper.loss = @cross_entropy
+
+# SELECTING PREPROCESSOR
+preprocess.preprocessor = @base_classification_preprocessor
+preprocess.modality_mapping = %modality_mapping
+preprocess.vars = %vars
+preprocess.use_static = True
+
+# SPECIFICALLY FOR GRUD
+TIMESTEP_LEVEL_PREDICTIONS = True
+
+# SELECTING DATASET
+include "configs/tasks/common/Dataloader.gin"
+
