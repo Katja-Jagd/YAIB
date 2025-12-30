@@ -139,11 +139,13 @@ icu_benchmarks/data/preprocessed_data_test/
 
 # HPC, bash, output and error logs 
 hpc_output/
-HPC_script_*
+*.sh
 
 # data subsets saved  
 preprocessed_data/
 
 # Ignore fine-tuning results
 finetuning_results/*
-icu_benchmarks/tuning/hp_tuning_results/*
+icu_benchmarks/tuning/hp_tuning_results/
+
+DELETE*

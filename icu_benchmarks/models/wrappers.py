@@ -718,85 +718,82 @@ class CustomDLPredictionWrapper(DLWrapper):
         return metrics
 
     def step_fn(self, batch, step_prefix=""):
-        """
-        Accepts batches from BATPolarsDataset with structure:
-        data, mask, label, times, static, delta, obs_mask
-        Only the first 5 tensors are used by the current model.
-        """
-        data, mask, label, times, static, *_ = batch  # Ignore delta, obs_mask for now
+      """
+      Accepts batches from BATPolarsDataset with structure:
+      data, mask, label, times, static, delta, obs_mask
+      Only the first 5 tensors are used by the current model.
+      """
 
-        data = data.to(self.device).float()
-        mask = mask.to(self.device).float()
-        times = times.to(self.device).float()
-        static = static.to(self.device).float()
-        label = label.to(self.device)
+      data, mask, label, times, static, *rest = batch
 
-        # Forward pass — assumes model accepts named args like in your notebook
-        output = self(data, static=static, time=times, sensor_mask=mask)
+      # rest might be: [delta, obs_mask] or [obs_mask] or []
+      obs_mask = None
+      if len(rest) >= 1:
+          obs_mask = rest[-1]
 
-        # [DEBUG] Print prediction and label information for first few batches
-        if hasattr(self, '_debug_batch_count'):
-            self._debug_batch_count[step_prefix] = self._debug_batch_count.get(step_prefix, 0) + 1
-        else:
-            self._debug_batch_count = {step_prefix: 1}
+      data = data.to(self.device).float()
+      mask = mask.to(self.device).float()
+      times = times.to(self.device).float()
+      static = static.to(self.device).float()
+      label = label.to(self.device)
 
-        """
-        if self._debug_batch_count[step_prefix] <= 3:
-            print(f"\n{'='*80}")
-            print(f"[DEBUG {step_prefix.upper()} - CustomDLPredictionWrapper] Batch {self._debug_batch_count[step_prefix]}")
-            print(f"{'='*80}")
-            print(f"Data shape: {data.shape}")
-            print(f"Mask shape: {mask.shape}")
-            print(f"Times shape: {times.shape}")
-            print(f"Static shape: {static.shape}")
-            print(f"Label shape: {label.shape}")
-            print(f"Output shape: {output.shape}")
-            print(f"\nFirst 5 outputs (logits):")
-            print(output[:5])
-            print(f"\nFirst 5 labels:")
-            print(label[:5])
-            if self.run_mode == RunMode.classification and output.shape[-1] > 1:
-                # For classification, show softmax probabilities
-                probs = torch.softmax(output, dim=1)
-                print(f"\nFirst 5 predictions (probabilities):")
-                print(probs[:5])
-                print(f"\nPredicted classes (argmax):")
-                print(torch.argmax(probs[:5], dim=1))
-            elif self.run_mode == RunMode.regression:
-                print(f"\nFirst 5 predictions (regression):")
-                print(output[:5])
-            print(f"{'='*80}\n")
-        """
+      # Forward pass
+      output = self(data, static=static, time=times, sensor_mask=mask)
 
-        # Loss computation
-        if self.run_mode == RunMode.classification:
-            if output.ndim == 3:
-                # Flatten time dimension (1)
-                output = output.reshape(-1, output.shape[-1])
-                label = label.reshape(-1)
-            loss = self.loss(output, label.squeeze().long())  # CrossEntropyLoss
-        elif self.run_mode == RunMode.regression:
-            # For regression tasks like LengthOfStay: label has shape (batch, timesteps)
-            # All timesteps have the same value, so take the first timestep
-            if label.dim() > 1:
-                label = label[:, 0]
-            loss = self.loss(output.squeeze(), label.float())
-        else:
-            raise ValueError("Unsupported run mode.")
+      # -------------------------
+      # Loss + metric preparation
+      # -------------------------
+      if self.run_mode == RunMode.classification:
+          logits = output
+          y = label
 
-        # Metric updates
-        transformed_output = self.output_transform((output, label))
-        for key, metric in self.metrics[step_prefix].items():
-            if isinstance(metric, torchmetrics.Metric):
-                # Most torchmetrics metrics (Accuracy, AUROC, etc.)
-                metric.update(*transformed_output)
-            else:
-                # Ignite's EpochMetric expects a single tuple
-                metric.update(transformed_output)
+          if logits.ndim == 3:
+              # (B, T, C) -> (B*T, C)
+              logits = logits.reshape(-1, logits.shape[-1])
+              y = y.reshape(-1)
 
+          loss = self.loss(logits, y.squeeze().long())  # CrossEntropyLoss
 
-        self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
-        return loss
+          # metrics expect whatever your output_transform expects
+          transformed_output = self.output_transform((logits, y))
+
+      elif self.run_mode == RunMode.regression:
+          pred = output.squeeze()
+          target = label
+
+          # Per-timestep regression with mask: pred/target are (B, T)
+          if obs_mask is not None and pred.ndim == 2 and target.ndim == 2:
+              obs_mask = obs_mask.to(self.device).bool()
+              pred_1d = pred[obs_mask]
+              target_1d = target.float()[obs_mask]
+          else:
+              # Sequence-level regression: ensure both are 1D aligned
+              if target.dim() > 1:
+                  target = target[:, 0]
+              pred_1d = pred.reshape(-1).float()
+              target_1d = target.reshape(-1).float()
+
+          loss = self.loss(pred_1d, target_1d)
+
+          # IMPORTANT: update metrics with 1D tensors so concatenation works
+          transformed_output = (pred_1d.detach(), target_1d.detach())
+
+      else:
+          raise ValueError("Unsupported run mode.")
+
+      # -------------
+      # Update metrics
+      # -------------
+      for key, metric in self.metrics[step_prefix].items():
+          if isinstance(metric, torchmetrics.Metric):
+              # torchmetrics typically expects metric.update(preds, target)
+              metric.update(*transformed_output)
+          else:
+              metric.update(transformed_output)
+
+      self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+      return loss
+
 
 @gin.configurable("SSLWrapper")
 class SSLWrapper(DLWrapper):
