@@ -466,6 +466,10 @@ class GRUDEncoder(nn.Module):
 
         grud_output = self.rnn(values, sensor_mask_permuted, time_expanded, h_t, x_keep_t, s_prev_t)
 
+        # NEW: allow returning per-timestep representations
+        if self.pooling in ("none", "sequence", None):
+            return grud_output
+
         if self.pooling == "hidden":
             last_valid_indices = time_mask.sum(dim=1).long() - 1
             pooled = grud_output[torch.arange(grud_output.shape[0]), last_valid_indices]
@@ -500,12 +504,24 @@ class GRUDEncoderPrediction(nn.Module):
     def forward(self, x, static, time, sensor_mask):
         features = self.encoder_class(x, static, time, sensor_mask)
 
-        if features.shape[1] != self.input_dim:
-            raise ValueError(
-                f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
-            )
+        # Patient-level: (B, H)
+        if features.dim() == 2:
+            if features.shape[1] != self.input_dim:
+                raise ValueError(
+                    f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[1]})"
+                )
+            return self.head(features)
 
-        return self.head(features)
+        # Per-timestep: (B, T, H)
+        if features.dim() == 3:
+            if features.shape[2] != self.input_dim:
+                raise ValueError(
+                    f"Mismatch between computed input_dim ({self.input_dim}) and actual ({features.shape[2]})"
+                )
+            return self.head(features)
+
+        raise ValueError(f"Unexpected feature tensor shape: {features.shape}")
+
 
 
 # Main wrapper class for YAIB integration
