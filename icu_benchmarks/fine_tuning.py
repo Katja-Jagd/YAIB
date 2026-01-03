@@ -165,7 +165,7 @@ def build_model_from_ckpt(
     - Timestep-level tasks (e.g. Sepsis): BAT supported via AutoregressiveEncoderCrossParallel
       (GRUD timestep support is repo-dependent; default is to block it to avoid silent misuse.)
     """
-    TIMESTEP_TASKS = {"Sepsis"}  # extend if needed
+    TIMESTEP_TASKS = {"Sepsis", "AKI"}  # extend if needed
 
     if model_type not in MODEL_REGISTRY:
         raise ValueError(f"Unknown model_type: {model_type}. Choose from {list(MODEL_REGISTRY.keys())}")

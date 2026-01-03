@@ -341,6 +341,54 @@ class DLPredictionWrapper(DLWrapper):
         prediction = torch.masked_select(out, mask.unsqueeze(-1)).reshape(-1, out.shape[-1]).to(self.device)
         target = torch.masked_select(labels, mask).to(self.device)
 
+        # [DEBUG] Print prediction and label information for first few batches
+        if hasattr(self, '_debug_batch_count'):
+            self._debug_batch_count[step_prefix] = self._debug_batch_count.get(step_prefix, 0) + 1
+        else:
+            self._debug_batch_count = {step_prefix: 1}
+
+        if self._debug_batch_count[step_prefix] <= 3:
+            """
+            print(f"\n{'='*80}")
+            print(f"[DEBUG {step_prefix.upper()}] Batch {self._debug_batch_count[step_prefix]}")
+            print(f"{'='*80}")
+            print(f"\n🔍 PREDICTION STRUCTURE:")
+            print(f"   Raw model output shape: {out.shape}")
+            if len(out.shape) == 3:
+                print(f"   → (batch={out.shape[0]}, timesteps={out.shape[1]}, classes={out.shape[2]})")
+                print(f"   → Model makes predictions at EVERY timestep!")
+            print(f"\n   Mask shape: {mask.shape}")
+            if len(mask.shape) == 2:
+                print(f"   → (batch={mask.shape[0]}, timesteps={mask.shape[1]})")
+                print(f"   → Mask determines which timesteps are valid/used")
+                print(f"   → Number of True values in mask (valid predictions): {mask.sum().item()}")
+            print(f"\n   After masking:")
+            print(f"   Prediction shape: {prediction.shape} ({prediction.shape[0]} total predictions)")
+            print(f"   Target shape: {target.shape} ({target.shape[0]} total labels)")
+            print(f"   → These are FLATTENED: all valid timesteps from all patients in batch")
+
+            print(f"\n📊 SAMPLE DATA (first patient's valid timesteps):")
+            # Calculate how many timesteps for first patient
+            first_patient_mask = mask[0]
+            n_valid = first_patient_mask.sum().item()
+            print(f"   First patient has {n_valid} valid timesteps (out of {len(first_patient_mask)} total)")
+
+            print(f"\n   First 5 predictions (logits):")
+            print(f"   {prediction[:5]}")
+            print(f"\n   First 5 targets:")
+            print(f"   {target[:5]}")
+            if prediction.shape[-1] > 1:
+                # For classification, show softmax probabilities
+                probs = torch.softmax(prediction, dim=1)
+                print(f"\n   First 5 predictions (probabilities):")
+                print(f"   {probs[:5]}")
+                print(f"\n   Predicted classes (argmax): {torch.argmax(probs[:5], dim=1)}")
+                print(f"\n   Label distribution in batch:")
+                print(f"   Class 0: {(target == 0).sum().item()} ({100*(target == 0).sum().item()/len(target):.1f}%)")
+                print(f"   Class 1: {(target == 1).sum().item()} ({100*(target == 1).sum().item()/len(target):.1f}%)")
+            print(f"{'='*80}\n")
+            """
+
         if prediction.shape[-1] > 1 and self.run_mode == RunMode.classification:
             # Classification task
             loss = self.loss(prediction, target.long(), weight=self.loss_weights.to(self.device)) + aux_loss
@@ -670,82 +718,82 @@ class CustomDLPredictionWrapper(DLWrapper):
         return metrics
 
     def step_fn(self, batch, step_prefix=""):
-        """
-        Accepts batches from BATPolarsDataset with structure:
-        data, mask, label, times, static, delta, obs_mask
-        Only the first 5 tensors are used by the current model.
-        """
+      """
+      Accepts batches from BATPolarsDataset with structure:
+      data, mask, label, times, static, delta, obs_mask
+      Only the first 5 tensors are used by the current model.
+      """
 
-        data, mask, label, times, static, *rest = batch
+      data, mask, label, times, static, *rest = batch
 
-        obs_mask = None
-        if len(rest) >= 2:
-            # assuming (delta, obs_mask)
-            obs_mask = rest[-1]
+      # rest might be: [delta, obs_mask] or [obs_mask] or []
+      obs_mask = None
+      if len(rest) >= 1:
+          obs_mask = rest[-1]
 
-        data = data.to(self.device).float()
-        mask = mask.to(self.device).float()
-        times = times.to(self.device).float()
-        static = static.to(self.device).float()
-        label = label.to(self.device)
+      data = data.to(self.device).float()
+      mask = mask.to(self.device).float()
+      times = times.to(self.device).float()
+      static = static.to(self.device).float()
+      label = label.to(self.device)
 
-        # Forward pass — assumes model accepts named args like in your notebook
-        output = self(data, static=static, time=times, sensor_mask=mask)
+      # Forward pass
+      output = self(data, static=static, time=times, sensor_mask=mask)
 
-        # Loss computation
-        if self.run_mode == RunMode.regression:
-            # output: (B, T) or (B, T, 1) or (B,) depending on model
-            output = output.squeeze()
+      # -------------------------
+      # Loss + metric preparation
+      # -------------------------
+      if self.run_mode == RunMode.classification:
+          logits = output
+          y = label
 
-            # If this is per-timestep regression, label is (B, T)
-            # Use obs_mask (B, T) to flatten valid timesteps into 1D
-            if obs_mask is not None and output.ndim == 2 and label.ndim == 2:
-                obs_mask = obs_mask.to(self.device).bool()
-                pred = output[obs_mask]          # (num_valid,)
-                target = label.float()[obs_mask] # (num_valid,)
+          if logits.ndim == 3:
+              # (B, T, C) -> (B*T, C)
+              logits = logits.reshape(-1, logits.shape[-1])
+              y = y.reshape(-1)
 
-                
-                # [DEBUG]
-                # --- DEBUG: inspect predictions in real LOS units ---
-                #if step_prefix in ("test"):
-                #    LOS_MAX_HOURS = 336.0  # or 336.0 — must match gin
-                #
-                #    print("\n[DEBUG] LOS sanity check (first batch only)")
-                #    print("  pred (scaled)  :", pred[:10].detach().cpu().tolist())
-                #    print("  target (scaled):", target[:10].detach().cpu().tolist())
-                #    print("  pred (hours)   :", (pred[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
-                #    print("  target (hours) :", (target[:10] * LOS_MAX_HOURS).detach().cpu().tolist())
-                #
-                #    self._printed_los_debug = True
-                # [DEBUG]
+          loss = self.loss(logits, y.squeeze().long())  # CrossEntropyLoss
 
-            else:
-                # fallback for sequence-level regression
-                pred = output.reshape(-1)
-                target = label.float().reshape(-1)
+          # metrics expect whatever your output_transform expects
+          transformed_output = self.output_transform((logits, y))
 
-            loss = self.loss(pred, target)
+      elif self.run_mode == RunMode.regression:
+          pred = output.squeeze()
+          target = label
 
-            # IMPORTANT: update metrics with 1D tensors so concatenation works
-            transformed_output = (pred.detach(), target.detach())
-            for key, metric in self.metrics[step_prefix].items():
-                if isinstance(metric, torchmetrics.Metric):
-                    metric.update(*transformed_output)
-                else:
-                    metric.update(transformed_output)
+          # Per-timestep regression with mask: pred/target are (B, T)
+          if obs_mask is not None and pred.ndim == 2 and target.ndim == 2:
+              obs_mask = obs_mask.to(self.device).bool()
+              pred_1d = pred[obs_mask]
+              target_1d = target.float()[obs_mask]
+          else:
+              # Sequence-level regression: ensure both are 1D aligned
+              if target.dim() > 1:
+                  target = target[:, 0]
+              pred_1d = pred.reshape(-1).float()
+              target_1d = target.reshape(-1).float()
 
-        else:
-            # your existing classification logic (unchanged)
-            loss = self.loss(output, label.squeeze().long())
-            transformed_output = self.output_transform((output, label))
-            for key, metric in self.metrics[step_prefix].items():
-                if isinstance(metric, torchmetrics.Metric):
-                    metric.update(*transformed_output)
-                else:
-                    metric.update(transformed_output)
+          loss = self.loss(pred_1d, target_1d)
 
-        self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
-        return loss
+          # IMPORTANT: update metrics with 1D tensors so concatenation works
+          transformed_output = (pred_1d.detach(), target_1d.detach())
+
+      else:
+          raise ValueError("Unsupported run mode.")
+
+      # -------------
+      # Update metrics
+      # -------------
+      for key, metric in self.metrics[step_prefix].items():
+          if isinstance(metric, torchmetrics.Metric):
+              # torchmetrics typically expects metric.update(preds, target)
+              metric.update(*transformed_output)
+          else:
+              metric.update(transformed_output)
+
+      self.log(f"{step_prefix}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+      return loss
+
 
 @gin.configurable("SSLWrapper")
 class SSLWrapper(DLWrapper):

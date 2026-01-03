@@ -23,7 +23,8 @@ TASK_TO_GIN_MAPPING = {
     # Binary Classification tasks
     "Mortality": "BinaryClassification",
     "Mortality24": "BinaryClassification",
-    "AKI": "BinaryClassification",
+    "AKI": "TimestepBinaryClassification",
+    "TimestepBinaryClassification": "TimestepBinaryClassification",
     "Sepsis": "BinaryClassification",
     # Regression tasks
     "KidneyFunction": "Regression",
