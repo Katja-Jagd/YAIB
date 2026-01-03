@@ -26,7 +26,7 @@ model/hyperparameter.class_to_tune = @GRUDModel
 model/hyperparameter.recurrent_n_units = (64, 256, "log")
 model/hyperparameter.dropout = (0.2, 0.4)
 model/hyperparameter.recurrent_dropout = (0.2, 0.4)
-model/hyperparameter.pooling = ["hidden", "mean", "max"]
+model/hyperparameter.pooling = "none"
 model/hyperparameter.prediction_head = @icu_benchmarks.models.dl_models.bat.RegressionHead
 model/hyperparameter.prediction_head_kwargs = {"output_dim": 1}
 
