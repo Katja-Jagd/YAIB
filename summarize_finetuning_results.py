@@ -1,8 +1,20 @@
 import pandas as pd
 import json
 
-model = "SSL_BAT_los_full"
+model = "SSL_BAT_aki_head"
 dataset = "hirid"
+
+# SSL GRUD aki head hirid
+#file = "finetuning_results/AKI/grud/hirid/head/summary_d73ed70ed4.csv" # 100-3000
+#file = "finetuning_results/AKI/grud/hirid/head/summary_2b0e534e6f.csv" #100-9506
+
+# SSL GRUD aki full hirid
+#file = "finetuning_results/AKI/grud/hirid/full/summary_2fc7b27037.csv" # 100-3000
+#file = "finetuning_results/AKI/grud/hirid/full/summary_e2f33e13ab.csv" # 100-9506
+
+# SSL BAT aki head hirid 
+file = "finetuning_results/AKI/bat/hirid/head/summary_a92e5f82a5.csv" # 100-3000
+#file = "" # 100-95096
 
 # SSL_GRUD_m24_head_hirid
 #file = "finetuning_results/pretrained_GRUD/hirid/head/summary_44a1def579.csv" # 100-3000
@@ -21,7 +33,7 @@ dataset = "hirid"
 
 # SSL_BAT_los_full_hirid
 #file = "finetuning_results_regression/pretrained_BAT/LengthOfStay/hirid/full/summary_199ae04371.csv" # 100-3000
-file = "finetuning_results_regression/pretrained_BAT/LengthOfStay/hirid/full/summary_51cd92d9e1.csv" # other sizes 100-7000 were manually extracted due to interrupted run, 9000-9506
+#file = "finetuning_results_regression/pretrained_BAT/LengthOfStay/hirid/full/summary_51cd92d9e1.csv" # other sizes 100-7000 were manually extracted due to interrupted run, 9000-9506
 
 # SSL_BAT_los_head_hirid
 #file = "finetuning_results_regression/pretrained_BAT/LengthOfStay/hirid/head/summary_5da3a4022f.csv" # 2000
