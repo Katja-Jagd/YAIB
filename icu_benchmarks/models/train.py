@@ -109,6 +109,7 @@ def train_common(
     train_dataset = dataset_class(data, split=Split.train, ram_cache=ram_cache, name=dataset_names["train"])
     val_dataset = dataset_class(data, split=Split.val, ram_cache=ram_cache, name=dataset_names["val"])
     train_dataset, val_dataset = assure_minimum_length(train_dataset), assure_minimum_length(val_dataset)
+    print(batch_size, len(train_dataset), len(val_dataset)) #for debugging
     batch_size = min(batch_size, len(train_dataset), len(val_dataset))
     print(f"Train dataset has {len(train_dataset)} samples") #for debugging
     print(f"Val dataset has {len(val_dataset)} samples") #for debugging
