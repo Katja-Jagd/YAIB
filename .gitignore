@@ -112,9 +112,10 @@ lsf*
 # Legacy temp stuff
 icu_benchmarks/legacy_MH
 MH_DEBUG
-
+deprecated/
 .vscode
 lightning_logs
+docs/personal_guides_radv
 
 # Mac file system
 .DS_Store
@@ -133,9 +134,15 @@ yaib_logs/
 # venv
 *venv/
 
+# claude
+CLAUDE.md
+
 # Some preprocessed data, to understand the data better TMP
 icu_benchmarks/data/preprocessed_data_test/
 /work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data_test/*.parquet
+data/
+demo_data/sepsis/eicu_demo_scaled/
+demo_data/sepsis/mimic_demo_scaled/
 
 # HPC, bash, output and error logs 
 hpc_output/

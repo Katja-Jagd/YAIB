@@ -45,6 +45,7 @@ def execute_repeated_cv(
     dataset_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY DATASET NAME
     stop_after_first_fold: bool = False,
 ) -> float:
+    print(enable_subset_train, subset_train_size, subset_train_seed)
     """Preprocesses data and trains a model for each fold.
 
     Args:
@@ -202,7 +203,7 @@ def execute_repeated_cv(
 
                 # Define path to save the preprocessed (and downsampled) data
                 REPO_ROOT = Path(__file__).resolve().parents[2] # Detect the YAIB repository root
-                subset_root = REPO_ROOT / "icu_benchmarks" / "data" / "preprocessed_data" # preprocessed subset root
+                subset_root = REPO_ROOT / "YAIB" /"icu_benchmarks" / "data" / "preprocessed_data" # preprocessed subset root
                 ds_name = dataset_name if dataset_name else os.path.basename(data_dir) # Use dataset_name parameter if provided, otherwise fall back to data_dir basename
                 task_folder = task_name if task_name else "default_task" # Include task_name in path to organize by task
                 folder_path = subset_root / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
