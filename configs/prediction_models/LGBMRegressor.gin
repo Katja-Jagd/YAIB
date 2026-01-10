@@ -6,6 +6,9 @@ include "configs/prediction_models/common/MLCommon.gin"
 # Train params
 train_common.model = @LGBMRegressor
 
+train_common.num_workers = 0 # To avoid freeze during dataloading 
+train_common.dataset_class = @PredictionPolarsDataset
+
 model/hyperparameter.class_to_tune = @LGBMRegressor
 model/hyperparameter.colsample_bytree = (0.33, 1.0)
 model/hyperparameter.max_depth = (3, 7)

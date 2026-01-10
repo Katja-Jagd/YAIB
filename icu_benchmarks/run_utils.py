@@ -16,7 +16,7 @@ from statistics import mean, pstdev
 from icu_benchmarks.models.utils import JsonResultLoggingEncoder
 from icu_benchmarks.wandb_utils import wandb_log
 import polars as pl
-
+from typing import Optional
 
 # Mapping from task names to their gin configuration files
 TASK_TO_GIN_MAPPING = {
@@ -29,6 +29,7 @@ TASK_TO_GIN_MAPPING = {
     # Regression tasks
     "KidneyFunction": "Regression",
     "LengthOfStay": "LengthOfStay",  # Has its own specialized gin
+    "LOS": "LengthOfStay",  # Has its own specialized gin
     # Imputation
     "Imputation": "DatasetImputation",
     # Allow direct gin file names for backwards compatibility
@@ -76,6 +77,7 @@ def build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Framework for benchmarking ML/DL models on ICU data")
 
     parser.add_argument("-d", "--data-dir", required=True, type=Path, help="Path to the parquet data directory.")
+    parser.add_argument("-pd", "--prepro-dir", required=False, type=Path, default = None, help="Path to the preprocessed data directory for subsets.")
     parser.add_argument(
         "-t",
         "--task",
@@ -355,3 +357,285 @@ def check_required_keys(vars, required_keys):
     missing_keys = [key for key in required_keys if key not in vars]
     if missing_keys:
         raise KeyError(f"Missing required keys in vars: {', '.join(missing_keys)}")
+
+SHIFT = 1_000_000_000  # used to make duplicated stay occurrences unique
+
+def _make_unique_int64_by_offset(
+    df_in: pl.DataFrame,
+    id_col: str = "stay_id",
+    original_id_col: str = "stay_id_original",
+    dup_ix_col: str = "_dup_ix",
+    shift: int = SHIFT,
+) -> pl.DataFrame:
+    return df_in.with_columns(
+        pl.when(pl.col(dup_ix_col) == 0)
+        .then(pl.col(original_id_col))
+        .otherwise(pl.col(original_id_col) + pl.col(dup_ix_col) * shift)
+        .alias(id_col)
+    )
+
+
+def _top_up_round_robin(
+    df_one_row_per_id: pl.DataFrame,
+    id_col: str,
+    n_needed: int,
+    seed: Optional[int],
+) -> pl.DataFrame:
+    """
+    Create n_needed extra samples by cycling through unique ids (shuffled),
+    so no id gets a 2nd extra copy until all ids got 1 extra copy.
+    Assumes df_one_row_per_id has exactly 1 row per id_col.
+    Returns duplicated rows (via join).
+    """
+    if n_needed <= 0:
+        return df_one_row_per_id.head(0)
+
+    ids = df_one_row_per_id.select(id_col).to_series().to_list()
+    if len(ids) == 0:
+        return df_one_row_per_id.head(0)
+
+    import random
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+
+    reps = (n_needed + len(ids) - 1) // len(ids)
+    picked = (ids * reps)[:n_needed]
+
+    picked_df = pl.DataFrame({id_col: picked})
+    return picked_df.join(df_one_row_per_id, on=id_col, how="left")
+
+
+def downsample_binary_classification(
+    df: pl.DataFrame,
+    label_col: str,
+    total_samples: int,
+    seed: Optional[int] = None,
+    id_col: str = "stay_id",
+    shift: int = SHIFT,
+) -> pl.DataFrame:
+    """
+    Mortality24: single-row-per-stay classification.
+    - Preserves class distribution
+    - If total_samples > available, oversamples via round-robin
+    - Makes oversampled copies get unique stay_id via SHIFT offsets
+    """
+    if df.height == 0:
+        return df
+
+    labels = df[label_col].unique().to_list()
+    if len(labels) == 0:
+        return df
+
+    # Count classes
+    label_counts = {}
+    total_original = 0
+    for label in labels:
+        c = df.filter(pl.col(label_col) == label).height
+        label_counts[label] = c
+        total_original += c
+
+    # Target samples per class
+    label_to_n = {
+        label: int(round((count / total_original) * total_samples))
+        for label, count in label_counts.items()
+    }
+
+    # Fix rounding to sum exactly total_samples
+    current = sum(label_to_n.values())
+    diff = total_samples - current
+    if diff != 0:
+        largest_label = max(label_to_n, key=label_to_n.get)
+        label_to_n[largest_label] += diff
+
+    # Sample per class
+    samples = []
+    for label, n_label in label_to_n.items():
+        df_label = df.filter(pl.col(label_col) == label)
+        available = df_label.height
+
+        n_no_replace = min(n_label, available)
+        n_needed = max(0, n_label - available)
+
+        if n_no_replace > 0:
+            samples.append(df_label.sample(n=n_no_replace, with_replacement=False, seed=seed))
+
+        if n_needed > 0:
+            logging.warning(
+                f"[Mortality24/CLS] Oversampling label={label}: requested {n_label}, available {available}. "
+                f"Top-up {n_needed} via round-robin."
+            )
+            samples.append(_top_up_round_robin(df_label, id_col=id_col, n_needed=n_needed, seed=seed))
+
+    combined = pl.concat(samples)
+
+    # Make duplicate occurrences unique
+    combined = combined.with_columns(
+        pl.col(id_col).alias("stay_id_original")
+    ).with_columns(
+        pl.cum_count("stay_id_original").over("stay_id_original").alias("_dup_ix")
+    ).with_columns(
+        (pl.col("_dup_ix") - pl.col("_dup_ix").min().over("stay_id_original")).alias("_dup_ix")
+    )
+
+    combined = _make_unique_int64_by_offset(
+        combined,
+        id_col=id_col,
+        original_id_col="stay_id_original",
+        dup_ix_col="_dup_ix",
+        shift=shift,
+    ).drop(["_dup_ix", "stay_id_original"])
+
+    # Shuffle output
+    return combined.sample(n=combined.height, with_replacement=False, seed=seed)
+
+
+def downsample_aki_classification(
+    df: pl.DataFrame,
+    label_col: str,
+    total_stays: int,
+    seed: Optional[int] = None,
+    id_col: str = "stay_id",
+    shift: int = SHIFT,
+) -> pl.DataFrame:
+    """
+    AKI: multi-row-per-stay with boolean label (timestep-level).
+    - Computes stay-level label = any(label_col)
+    - Samples stays preserving stay-level label distribution
+    - Oversamples stays via round-robin if needed
+    - Expands back to rows by join
+    - Makes oversampled stay occurrences unique via SHIFT offsets
+    """
+    if df.height == 0:
+        return df
+
+    # Guard: label should be boolean for AKI
+    if df.schema[label_col] != pl.Boolean:
+        raise ValueError(f"AKI expects boolean label_col='{label_col}', got {df.schema[label_col]}")
+
+    stay_level = (
+        df.group_by(id_col)
+        .agg(pl.col(label_col).max().alias("stay_label"))
+    )
+    if stay_level.height == 0:
+        return df
+
+    n_stays_to_sample = min(total_stays, stay_level.height)
+
+    labels = stay_level["stay_label"].unique().to_list()
+    label_counts = {}
+    total_original = 0
+    for lab in labels:
+        c = stay_level.filter(pl.col("stay_label") == lab).height
+        label_counts[lab] = c
+        total_original += c
+
+    label_to_n = {
+        lab: int(round((count / total_original) * n_stays_to_sample))
+        for lab, count in label_counts.items()
+    }
+
+    # Fix rounding
+    current = sum(label_to_n.values())
+    diff = n_stays_to_sample - current
+    if diff != 0:
+        largest_label = max(label_to_n, key=label_to_n.get)
+        label_to_n[largest_label] += diff
+
+    samples = []
+    for lab, n_lab in label_to_n.items():
+        df_lab = stay_level.filter(pl.col("stay_label") == lab)
+        available = df_lab.height
+
+        n_no_replace = min(n_lab, available)
+        n_needed = max(0, n_lab - available)
+
+        if n_no_replace > 0:
+            samples.append(df_lab.sample(n=n_no_replace, with_replacement=False, seed=seed))
+
+        if n_needed > 0:
+            logging.warning(
+                f"[AKI] Oversampling stay_label={lab}: requested {n_lab}, available {available}. "
+                f"Top-up {n_needed} via round-robin."
+            )
+            samples.append(_top_up_round_robin(df_lab, id_col=id_col, n_needed=n_needed, seed=seed))
+
+    sampled_stays = pl.concat(samples)
+
+    # duplicate index per stay occurrence
+    sampled_stays = sampled_stays.with_columns(
+        pl.cum_count(id_col).over(id_col).alias("_dup_ix")
+    ).with_columns(
+        (pl.col("_dup_ix") - pl.col("_dup_ix").min().over(id_col)).alias("_dup_ix")
+    )
+
+    # expand to rows
+    result = sampled_stays.join(df, on=id_col, how="left").with_columns(
+        pl.col(id_col).alias("stay_id_original")
+    )
+
+    # shift ids for duplicates
+    result = _make_unique_int64_by_offset(
+        result,
+        id_col=id_col,
+        original_id_col="stay_id_original",
+        dup_ix_col="_dup_ix",
+        shift=shift,
+    )
+
+    return result.drop(["_dup_ix", "stay_label", "stay_id_original"])
+
+
+def downsample_los_regression(
+    df: pl.DataFrame,
+    total_stays: int,
+    seed: Optional[int] = None,
+    id_col: str = "stay_id",
+) -> pl.DataFrame:
+    """
+    LOS: regression, multi-row-per-stay (timesteps).
+    - Samples stays uniformly (no oversampling)
+    """
+    if df.height == 0:
+        return df
+
+    unique_stays = df.select(id_col).unique()
+    if unique_stays.height == 0:
+        return df
+
+    n = min(total_stays, unique_stays.height)
+    sampled = unique_stays.sample(n=n, with_replacement=False, seed=seed)
+    stay_ids = sampled.select(id_col).to_series().to_list()
+    return df.filter(pl.col(id_col).is_in(stay_ids))
+
+def downsample_outcome_by_task(
+    df_outcome: pl.DataFrame,
+    task_name: str,
+    subset_size: int,
+    subset_seed: int,
+) -> pl.DataFrame:
+
+    if task_name == "Mortality24":
+        return downsample_binary_classification(
+            df=df_outcome,
+            label_col="label",
+            total_samples=subset_size,
+            seed=subset_seed,
+        )
+    elif task_name == "AKI":
+        return downsample_aki_classification(
+            df=df_outcome,
+            label_col="label",
+            total_stays=subset_size,
+            seed=subset_seed,
+        )
+    elif task_name in ("LOS", "LengthOfStay"):
+        return downsample_los_regression(
+            df=df_outcome,
+            total_stays=subset_size,
+            seed=subset_seed,
+        )
+    else:
+        raise ValueError(
+            f"Unknown task_name='{task_name}'. Expected one of: Mortality24, AKI, LOS."
+        )
+
