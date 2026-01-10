@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.loader import BATPolarsDataset
 from icu_benchmarks.models.dl_models.bat import SSL_BAT, EncoderPrediction, BinaryClassificationHead
+from icu_benchmarks.models.dl_models.grud import SSL_GRUD, GRUDEncoderPrediction
 from icu_benchmarks.data.preprocessor import *
 from icu_benchmarks.models.train import load_model
 
@@ -72,33 +73,58 @@ def build_datasets(data):
         BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT),
     )
 
+MODEL_REGISTRY = {
+    "bat": {
+        "ssl_class": SSL_BAT,
+        "prediction_wrapper": EncoderPrediction,
+    },
+    "grud": {
+        "ssl_class": SSL_GRUD,
+        "prediction_wrapper": GRUDEncoderPrediction,
+    },
+}
 
-def load_pretrained_model(ckpt_path):
+def load_pretrained_model(ckpt_path, model_type):
+    """
+    Load a pretrained SSL model (BAT or GRUD) and wrap it
+    with a binary classification head for mortality prediction.
+    """
+    if model_type not in MODEL_REGISTRY:
+        raise ValueError(f"Unknown model_type: {model_type}")
+
     ckpt = torch.load(ckpt_path, map_location="cpu")
     hparams = ckpt.get("hyper_parameters", {})
 
-    ssl_model = SSL_BAT(**hparams)
+    ssl_class = MODEL_REGISTRY[model_type]["ssl_class"]
+    wrapper_class = MODEL_REGISTRY[model_type]["prediction_wrapper"]
 
-    encoder_dict = {
+    # Instantiate SSL model
+    ssl_model = ssl_class(**hparams)
+
+    # Load encoder weights from checkpoint
+    encoder_state = {
         k.replace("model.encoder_class.", ""): v
         for k, v in ckpt["state_dict"].items()
         if k.startswith("model.encoder_class.")
     }
-    ssl_model.model.encoder_class.load_state_dict(encoder_dict)
 
-    # classification wrapper with pretrained encoder
-    return EncoderPrediction(
+    ssl_model.model.encoder_class.load_state_dict(encoder_state)
+
+    # Wrap encoder with classification head
+    model = wrapper_class(
         encoder_class=ssl_model.model.encoder_class,
         prediction_head=BinaryClassificationHead,
         prediction_head_kwargs={"num_classes": 2},
     )
+
+    return model
 
 
 # ----------------------------------------------------
 # Training + Validation + Testing
 # ----------------------------------------------------
 def run_single_experiment(
-    dataset, task, size, seed, model_path, lr, batch_size, fine_tune_head, num_epochs, subset_root
+    dataset, task, size, seed, model_path, model_type, lr, batch_size, fine_tune_head, num_epochs, subset_root
 ):
     # ------------------------------------------------
     # EXACT SAME SEEDING BEHAVIOR AS SCRIPT 2
@@ -125,7 +151,7 @@ def run_single_experiment(
     )
 
     # model
-    model = load_pretrained_model(model_path)
+    model = load_pretrained_model(model_path, model_type)
 
     # freeze/unfreeze exactly like Script 2
     if fine_tune_head:
@@ -267,6 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("--lrs", nargs="+", type=float, required=True)
     parser.add_argument("--fine_tune_head", action="store_true")
     parser.add_argument("--model_path", required=True)
+    parser.add_argument("--model_type", type=str, required=True, choices=["bat", "grud"], help="Which pretrained SSL model to fine-tune")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--subset_root", default="/work3/s185395/YAIB/icu_benchmarks/data/preprocessed_data")
@@ -281,12 +308,14 @@ if __name__ == "__main__":
             size=args.size,
             seed=args.seed,
             model_path=args.model_path,
+            model_type=args.model_type,
             lr=lr,
             batch_size=args.batch_size,
             fine_tune_head=args.fine_tune_head,
             num_epochs=args.num_epochs,
             subset_root=args.subset_root,
         )
+        
         res["Dataset"] = args.dataset
         res["Size"] = args.size
         res["Fine_tune_head"] = args.fine_tune_head
