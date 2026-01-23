@@ -19,8 +19,8 @@ import inspect
 import torch_scatter
 
 from icu_benchmarks.constants import RunMode
-from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper
-from icu_benchmarks.models.dl_models.bat import BinaryClassificationHead, RegressionHead, PositionalEncodingTF, ForecastingHead
+from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper
+from icu_benchmarks.models.dl_models.bat import BinaryClassificationHead, RegressionHead, PositionalEncodingTF
 
 
 # Utility Functions (from seft_utils.py)
@@ -73,7 +73,7 @@ class Segmentpooling(nn.Module):
                     0,
                     ids.unsqueeze(-1).expand(-1, x.shape[1]),
                     x,
-                ) / torch.bincount(ids.to(torch.int64)).float().to(x.device).unsqueeze(-1)
+                ) / torch.bincount(ids).float().unsqueeze(-1)
             elif pooling_fn == "max":
                 return lambda x, ids: torch.scatter_reduce(
                     torch.full(
@@ -336,19 +336,18 @@ class DeepSetAttentionEncoder(nn.Module):
                 nn.LazyLinear(phi_input_dim), # Second dense layer
             )
 
-        # self.rho = build_dense_dropout_model(
-        #     heads * seft_latent_width,
-        #     seft_n_rho_layers,
-        #     seft_rho_width,
-        #     seft_rho_dropout,
-        #     dense_kwargs=dense_options,
-        # )
+        self.rho = build_dense_dropout_model(
+            heads * seft_latent_width,
+            seft_n_rho_layers,
+            seft_rho_width,
+            seft_rho_dropout,
+            dense_kwargs=dense_options,
+        )
 
         self.to_segments = PaddedToSegments()
 
         # Store output dimension for prediction head
-        # Output is concatenated across attention heads
-        self.output_dim = heads * seft_latent_width
+        self.output_dim = seft_rho_width
 
     def forward(self, x, static, time, sensor_mask, **kwargs) -> torch.Tensor:
         """
@@ -383,7 +382,7 @@ class DeepSetAttentionEncoder(nn.Module):
         time = time.squeeze(-1)
 
         transformed_times = self.positional_encoding(time).squeeze(1)
-        transformed_measurements = F.one_hot(sensor_mask.long(), self.n_modalities).float().to(x.device)
+        transformed_measurements = F.one_hot(sensor_mask, self.n_modalities).float()
 
         combined_values = torch.cat(
             (transformed_times, x, transformed_measurements), dim=-1
@@ -413,9 +412,7 @@ class DeepSetAttentionEncoder(nn.Module):
         pooled_values = self.pooling(
             torch.cat(weighted_values, dim=-1), segment_ids
         )
-        #return self.rho(pooled_values)
-        # rho removed, as we are using the shared prediction head for fair comparison
-        return pooled_values
+        return self.rho(pooled_values)
 
     def flatten_unaligned_measurements(self, x, static, time, sensor_mask):
         """
@@ -549,82 +546,6 @@ class DeepSetAttentionModel(CustomDLPredictionWrapper):
 
         if prediction_head_kwargs is None:
             prediction_head_kwargs = {"num_classes": 2}
-
-        self.save_hyperparameters()
-
-        sensors_count = input_size[1]
-        max_timepoint_count = input_size[2]
-        static_count = kwargs.get("static_count", 4)
-
-        encoder = DeepSetAttentionEncoder(
-            device=self.device,
-            sensors_count=sensors_count,
-            max_timepoint_count=max_timepoint_count,
-            static_count=static_count,
-            seft_n_phi_layers=seft_n_phi_layers,
-            seft_phi_width=seft_phi_width,
-            seft_n_psi_layers=seft_n_psi_layers,
-            seft_psi_width=seft_psi_width,
-            seft_psi_latent_width=seft_psi_latent_width,
-            seft_dot_prod_dim=seft_dot_prod_dim,
-            heads=heads,
-            attn_dropout=attn_dropout,
-            seft_latent_width=seft_latent_width,
-            seft_phi_dropout=seft_phi_dropout,
-            seft_n_rho_layers=seft_n_rho_layers,
-            seft_rho_width=seft_rho_width,
-            seft_rho_dropout=seft_rho_dropout,
-            seft_max_timescales=seft_max_timescales,
-            seft_n_positional_dims=seft_n_positional_dims,
-        )
-
-        self.model = DeepSetAttentionEncoderPrediction(
-            encoder_class=encoder,
-            prediction_head=prediction_head,
-            prediction_head_kwargs=prediction_head_kwargs,
-        )
-
-    def forward(self, data, static, time, sensor_mask):
-        return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
-
-
-@gin.configurable
-class SSL_DeepSetAttention(SSLWrapper):
-    """
-    Self-Supervised Learning wrapper for Deep Set Attention model.
-
-    This enables the Deep Set Attention model to be used for SSL pretraining
-    with forecasting tasks, similar to SSL_BAT and SSL_iTransformer.
-    """
-
-    _supported_run_modes = [RunMode.classification, RunMode.regression]
-
-    def __init__(
-        self,
-        input_size,
-        seft_n_phi_layers=2,
-        seft_phi_width=128,
-        seft_n_psi_layers=2,
-        seft_psi_width=128,
-        seft_psi_latent_width=128,
-        seft_dot_prod_dim=64,
-        heads=4,
-        attn_dropout=0.3,
-        seft_latent_width=128,
-        seft_phi_dropout=0.2,
-        seft_n_rho_layers=2,
-        seft_rho_width=128,
-        seft_rho_dropout=0.2,
-        seft_max_timescales=500,
-        seft_n_positional_dims=16,
-        prediction_head=ForecastingHead,
-        prediction_head_kwargs={"sensors_count": 48, "forecast_len": 2},
-        lr=1e-4,
-        optimizer=torch.optim.Adam,
-        *args,
-        **kwargs
-    ):
-        super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
 
         self.save_hyperparameters()
 
