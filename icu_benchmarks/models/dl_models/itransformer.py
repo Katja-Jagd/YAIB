@@ -6,6 +6,7 @@ from icu_benchmarks.models.wrappers import CustomDLPredictionWrapper, SSLWrapper
 # From iTransformer
 import torch
 import numpy as np
+from torch import nn
 from x_transformers import Encoder
 
 # Import prediction heads and utility functions from BAT to avoid duplication
@@ -30,7 +31,7 @@ class EncoderPredictionInverted(nn.Module):
         self.prediction_head_kwargs = prediction_head_kwargs or {}
 
         # Handling input dim for head depending on the output dimension of the encoding model
-        if isinstance(self.encoder_class, (EncoderClassifierInverted, AutoregressiveEncoderClassifierInverted)):
+        if isinstance(self.encoder_class, EncoderClassifierInverted):
             if self.encoder_class.use_static:
                 self.input_dim = (
                     self.encoder_class.sensors_count * self.encoder_class.time_axis_dim
@@ -392,11 +393,6 @@ class AutoregressiveEncoderClassifierInverted(nn.Module):
 class iTransformer(CustomDLPredictionWrapper):
     """
     Inverted Transformer wrapper for YAIB framework.
-
-    Automatically selects between regular and autoregressive encoder based on
-    the TIMESTEP_LEVEL_PREDICTIONS gin parameter:
-    - If True: Uses AutoregressiveEncoderClassifierInverted for per-timestep predictions (AKI, LOS)
-    - If False: Uses EncoderClassifierInverted with pooling for single prediction (Mortality)
     """
 
     _supported_run_modes = [RunMode.classification, RunMode.regression]
@@ -427,43 +423,20 @@ class iTransformer(CustomDLPredictionWrapper):
         actual_timepoint_count = input_size[2]
         static_count = kwargs.get("static_count", 4)
 
-        # Check if we should use autoregressive (per-timestep) mode
-        try:
-            skip_pooling = gin.query_parameter("%TIMESTEP_LEVEL_PREDICTIONS")
-        except Exception:
-            skip_pooling = False
-
-        # Instantiate appropriate encoder
-        if skip_pooling:
-            # Per-timestep predictions for tasks like AKI, LOS
-            encoder = AutoregressiveEncoderClassifierInverted(
-                device=self.device,
-                pooling="mean",  # Not used in autoregressive mode
-                time_embed_size=time_embed_size,
-                layers=layers,
-                heads=heads,
-                dropout=dropout,
-                attn_dropout=attn_dropout,
-                use_mask=use_mask,
-                sensors_count=sensors_count,
-                max_timepoint_count=actual_timepoint_count,
-                static_count=static_count,
-            )
-        else:
-            # Single prediction with pooling for tasks like Mortality
-            encoder = EncoderClassifierInverted(
-                device=self.device,
-                pooling="mean",
-                time_embed_size=time_embed_size,
-                layers=layers,
-                heads=heads,
-                dropout=dropout,
-                attn_dropout=attn_dropout,
-                use_mask=use_mask,
-                sensors_count=sensors_count,
-                max_timepoint_count=actual_timepoint_count,
-                static_count=static_count,
-            )
+        # Instantiate inverted encoder
+        encoder = EncoderClassifierInverted(
+            device=self.device,
+            pooling="mean",
+            time_embed_size=time_embed_size,
+            layers=layers,
+            heads=heads,
+            dropout=dropout,
+            attn_dropout=attn_dropout,
+            use_mask=use_mask,
+            sensors_count=sensors_count,
+            max_timepoint_count=actual_timepoint_count,
+            static_count=static_count,
+        )
 
         # Compose full prediction model
         self.model = EncoderPredictionInverted(
@@ -471,6 +444,9 @@ class iTransformer(CustomDLPredictionWrapper):
             prediction_head=prediction_head,
             prediction_head_kwargs=prediction_head_kwargs,
         )
+
+        # Helps CustomDLPredictionWrapper with setting binary classification metrics
+        self.logit = nn.Linear(1, prediction_head_kwargs.get("num_classes", 2))  # dummy shape
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
@@ -511,8 +487,6 @@ class SSL_iTransformer(SSLWrapper):
         sensors_count = input_size[1]
         actual_timepoint_count = input_size[2]
         static_count = kwargs.get("static_count", 4)
-        use_static = kwargs.get("use_static", True)
-        obs_strategy = kwargs.get("obs_strategy", "both")
 
         # Instantiate inverted encoder
         encoder = EncoderClassifierInverted(
@@ -527,8 +501,6 @@ class SSL_iTransformer(SSLWrapper):
             sensors_count=sensors_count,
             max_timepoint_count=actual_timepoint_count,
             static_count=static_count,
-            use_static=use_static,
-            obs_strategy=obs_strategy,
         )
 
         # Compose full prediction model
