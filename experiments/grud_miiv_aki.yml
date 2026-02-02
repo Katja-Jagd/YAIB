@@ -1,0 +1,85 @@
+# WandB sweep configuration for GRUD supervised learning
+# Dataset: MIMIC-IV
+# Task: AKI (Acute Kidney Injury prediction)
+# Model: GRUD (from scratch, not SSL pretrained)
+
+program: icu-benchmarks
+command:
+  - ${env}
+  - ${program}
+  - train
+  - -d
+  - /binf-isilon/winthergrp/gsn245/scratch/YAIB/data/aki_from_katja/miiv
+  - -n
+  - miiv
+  - -t
+  - AKI
+  - -m
+  - GRUD
+  - -gc
+  - -lc
+  - -s
+  - "2222"
+  - -l
+  - ../yaib_logs_grud_supervised/
+  - --wandb-sweep
+
+method: random
+metric:
+  name: avg.auroc
+  goal: maximize
+
+name: grud_miiv_aki_supervised
+
+early_terminate:
+  type: hyperband
+  min_iter: 3
+
+parameters:
+  # Training hyperparameters (matches SSL pretraining sweeps)
+  train_common.epochs:
+    value: 25
+
+  train_common.batch_size:
+    values: [16, 32, 64, 128, 256, 512]
+
+  train_common.patience:
+    value: 10
+
+  train_common.min_delta:
+    value: 1e-4
+
+  # Optimizer hyperparameters (matches SSL pretraining sweeps)
+  Adam.lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 1e-2
+
+  Adam.weight_decay:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  # Model architecture hyperparameters (matches SSL pretraining sweeps)
+  GRUDModel.recurrent_n_units:
+    values: [32, 64, 128, 256]
+
+  GRUDModel.dropout:
+    values: [0.0, 0.1, 0.2, 0.3, 0.4]
+
+  GRUDModel.recurrent_dropout:
+    values: [0.0, 0.1, 0.2, 0.3, 0.4]
+
+  GRUDModel.pooling:
+    values: ["hidden"]
+
+  # Cross-validation settings
+  execute_repeated_cv.cv_repetitions:
+    value: 1
+
+  execute_repeated_cv.cv_folds:
+    value: 5
+
+  # Seed
+  seed:
+    value: 2222

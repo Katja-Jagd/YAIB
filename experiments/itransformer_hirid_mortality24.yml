@@ -1,0 +1,89 @@
+# WandB sweep configuration for iTransformer supervised learning
+# Dataset: HiRID
+# Task: Mortality24 (24-hour mortality prediction)
+# Model: iTransformer (Inverted Transformer - from scratch, not SSL pretrained)
+
+program: icu-benchmarks
+command:
+  - ${env}
+  - ${program}
+  - train
+  - -d
+  - /binf-isilon/winthergrp/gsn245/scratch/YAIB/data/mortality24_from_katja/hirid
+  - -n
+  - hirid
+  - -t
+  - Mortality24
+  - -m
+  - iTransformer
+  - -gc
+  - -lc
+  - -l
+  - ../yaib_logs_itransformer_supervised_hirid_mortality24/
+  - --wandb-sweep
+
+method: random
+metric:
+  name: avg.auroc
+  goal: maximize
+
+name: itransformer_hirid_mortality24_supervised
+
+early_terminate:
+  type: hyperband
+  min_iter: 3
+
+parameters:
+  # Training hyperparameters
+  train_common.epochs:
+    value: 15
+
+  train_common.batch_size:
+    values: [4, 8, 16, 32, 64]
+
+  train_common.patience:
+    value: 10
+
+  train_common.min_delta:
+    value: 1e-4
+
+  # Optimizer hyperparameters
+  Adam.lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  Adam.weight_decay:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  # Model architecture hyperparameters (iTransformer-specific)
+  model/hyperparameter.time_embed_size:
+    values: [16, 64, 128]
+
+  model/hyperparameter.heads:
+    values: [1, 2, 4]
+
+  model/hyperparameter.layers:
+    values: [2, 6, 12]
+
+  model/hyperparameter.dropout:
+    values: [0.1, 0.2, 0.4]
+
+  model/hyperparameter.attn_dropout:
+    values: [0.1, 0.2, 0.4]
+
+  # Cross-validation settings
+  execute_repeated_cv.cv_repetitions:
+    value: 1
+
+  execute_repeated_cv.cv_folds:
+    value: 1
+
+  execute_repeated_cv.stop_after_first_fold:
+    value: True
+
+  # Seed
+  seed:
+    value: 2222

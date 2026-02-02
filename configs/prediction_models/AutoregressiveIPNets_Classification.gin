@@ -1,0 +1,47 @@
+# Settings for Autoregressive IP-Nets for classification tasks
+# Makes per-timestep predictions using causal masking in interpolation
+# and autoregressive GRU outputs
+
+# Common settings for DL models
+include "configs/prediction_models/common/DLCommon.gin"
+
+# Dataloader
+BATPolarsDataset.runmode = "classification"
+
+# Train params
+train_common.model = @AutoregressiveIPNetsModel
+train_common.dataset_class = @BATPolarsDataset
+train_common.verbose = True
+train_common.cpu = False
+
+# Optimizer params
+optimizer/hyperparameter.class_to_tune = @Adam
+optimizer/hyperparameter.weight_decay = 1e-6
+optimizer/hyperparameter.lr = (1e-5, 1e-3)
+
+# Model params
+model/hyperparameter.class_to_tune = @AutoregressiveIPNetsModel
+model/hyperparameter.recurrent_n_units = (64, 128, 256, "log")
+model/hyperparameter.dropout = (0.2, 0.4)
+model/hyperparameter.recurrent_dropout = (0.2, 0.4)
+model/hyperparameter.ipnets_imputation_stepsize = [0.25, 0.5, 1.0]
+model/hyperparameter.ipnets_reconst_fraction = [0.3, 0.5, 0.7]
+model/hyperparameter.reconstruction_loss_weight = [0.5, 1.0, 2.0]
+
+# Per-timestep classification head
+model/hyperparameter.prediction_head = @icu_benchmarks.models.dl_models.bat.TimeseriesClassificationHead
+model/hyperparameter.prediction_head_kwargs = {"num_classes": 2}
+
+train_common.epochs = 100
+train_common.batch_size = 64
+train_common.patience = 10
+train_common.min_delta = 1e-4
+
+tune_hyperparameters.scopes = ["model", "optimizer"]
+tune_hyperparameters.n_initial_points = 5
+tune_hyperparameters.n_calls = 20
+tune_hyperparameters.folds_to_tune_on = 1
+
+# CV params
+execute_repeated_cv.cv_repetitions = 1
+execute_repeated_cv.cv_folds = 5
