@@ -19,6 +19,7 @@ train_common.verbose = True
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
 optimizer/hyperparameter.weight_decay = (1e-6, 1e-4)
+<<<<<<< HEAD
 optimizer/hyperparameter.lr = (1e-5, 1e-2)
 
 # Encoder params
@@ -31,6 +32,20 @@ model/hyperparameter.attn_dropout = (0.1, 0.2, 0.4)
 model/hyperparameter.use_mask = False
 model/hyperparameter.prediction_head = @icu_benchmarks.models.dl_models.bat.ForecastingHead
 model/hyperparameter.pooling = "mean" 
+=======
+optimizer/hyperparameter.lr = (1e-5, 1e-3)
+
+# Encoder params
+model/hyperparameter.class_to_tune = @SSL_iTransformer
+model/hyperparameter.time_embed_size = [8, 16, 32, 64, 128]
+model/hyperparameter.layers = [2, 6, 8, 12]
+model/hyperparameter.heads = (1, 2, 4)
+model/hyperparameter.dropout = (0.2, 0.6)
+model/hyperparameter.attn_dropout = (0.2, 0.6)
+model/hyperparameter.use_mask = False
+model/hyperparameter.prediction_head = @icu_benchmarks.models.dl_models.bat.ForecastingHead
+model/hyperparameter.pooling = "mean"
+>>>>>>> PERSONAL FILES/IN DEVELOPMENT
 model/hyperparameter.prediction_head_kwargs = {
   "sensors_count": 48,
   "forecast_len": 2,

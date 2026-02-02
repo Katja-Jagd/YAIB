@@ -19,6 +19,7 @@ train_common.verbose = True
 # Optimizer params
 optimizer/hyperparameter.class_to_tune = @Adam
 optimizer/hyperparameter.weight_decay = (1e-6, 1e-4)
+<<<<<<< HEAD
 optimizer/hyperparameter.lr = (1e-5, 1e-2)
 
 # Model params
@@ -26,6 +27,16 @@ model/hyperparameter.class_to_tune = @SSL_IPNets
 model/hyperparameter.recurrent_n_units = [32, 64, 128, 256]
 model/hyperparameter.dropout = (0.2, 0.3, 0.4)
 model/hyperparameter.recurrent_dropout = (0.2, 0.3, 0.4)
+=======
+optimizer/hyperparameter.lr = (1e-5, 1e-3)
+
+# TODO: CHECK 
+# Model params
+model/hyperparameter.class_to_tune = @SSL_IPNets
+model/hyperparameter.recurrent_n_units = [32, 64, 128, 256]
+model/hyperparameter.dropout = (0.2, 0.4)
+model/hyperparameter.recurrent_dropout = (0.2, 0.6)
+>>>>>>> PERSONAL FILES/IN DEVELOPMENT
 model/hyperparameter.pooling = "hidden"  # One of: hidden, mean, max
 model/hyperparameter.ipnets_imputation_stepsize = [0.1, 0.25, 0.5, 1.0]
 model/hyperparameter.ipnets_reconst_fraction = [0.005, 0.1, 0.2, 0.5, 0.75]
