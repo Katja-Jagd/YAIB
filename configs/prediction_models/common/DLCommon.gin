@@ -10,6 +10,8 @@ import icu_benchmarks.models.dl_models.bat
 import icu_benchmarks.models.dl_models.grud
 import icu_benchmarks.models.dl_models.itransformer
 import icu_benchmarks.models.dl_models.ip_nets
+import icu_benchmarks.models.dl_models.deep_set_attention
+import icu_benchmarks.models.dl_models.radv_transformer
 import icu_benchmarks.models.utils
 
 # Do not generate features from dynamic data
