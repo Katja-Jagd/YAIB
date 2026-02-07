@@ -210,6 +210,8 @@ def main(my_args=tuple(sys.argv[1:])):
         complete_train=args.complete_train,
         task_name=task_name,
         dataset_name=name,
+        subset_balance=args.subset_balance,
+        subset_only=args.subset_only,
     )
 
     log_full_line("FINISHED TRAINING", level=logging.INFO, char="=", num_newlines=3)

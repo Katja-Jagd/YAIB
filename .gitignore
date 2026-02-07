@@ -156,6 +156,8 @@ finetuning_results/*
 icu_benchmarks/tuning/hp_tuning_results/
 
 DELETE*
+delete*
+dm*
 
 # Do not allow any data except demo_data
 *.zip

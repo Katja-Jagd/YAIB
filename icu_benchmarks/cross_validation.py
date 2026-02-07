@@ -9,6 +9,7 @@ from icu_benchmarks.run_utils import (
     aggregate_results,
     downsample_outcome_by_task,
     SHIFT,
+    debug_subset_outcome,
 )
 from icu_benchmarks.data.split_process_data import preprocess_data
 from icu_benchmarks.models.train import train_common
@@ -47,6 +48,8 @@ def execute_repeated_cv(
     verbose: bool = False,
     wandb: bool = False,
     complete_train: bool = False,
+    subset_balance: str = 'equal', # NEW # "preserve" | "equal"
+    subset_only: bool = True,  
     enable_subset_train: bool = False, # ADDED FOR SUBSET
     subset_train_size: int = 1000, # ADDED FOR SUBSET
     subset_train_seed: int = 42, # ADDED FOR SUBSET
@@ -118,7 +121,7 @@ def execute_repeated_cv(
                 pp_dir = prepro_dir 
                 ds_name = dataset_name if dataset_name else os.path.basename(data_dir)
                 task_folder = task_name if task_name else "default_task"
-                folder_path = pp_dir / task_folder / str(ds_name) / f"{subset_train_size}_{subset_train_seed}"
+                folder_path = pp_dir / task_folder / str(ds_name) / subset_balance / f"{subset_train_size}_{subset_train_seed}"
                 folder_path.mkdir(parents=True, exist_ok=True)
 
                 expected_files = [
@@ -189,8 +192,22 @@ def execute_repeated_cv(
                         task_name=task_name,
                         subset_size=subset_train_size,
                         subset_seed=subset_train_seed,
+                        balance_mode=subset_balance,
                     )
                     
+                    # [DEBUG]
+                    debug_subset_outcome(downsampled_outcome, task_name, SHIFT)
+                    # [DEBUG]
+
+                    if task_name == "AKI":
+                        stay_level = (
+                            downsampled_outcome
+                            .group_by("stay_id")
+                            .agg(pl.col("label").max().alias("stay_label"))
+                        )
+                        print(stay_level.group_by("stay_label").len())
+
+                                        
                     # 2) Map DOWN-SAMPLED outcome stay_ids to original feature stay_ids
                     # IMPORTANT: For AKI/LOS, OUTCOME has multiple rows per stay, so we must deduplicate stay_ids
                     outcome_map = (
@@ -212,6 +229,31 @@ def execute_repeated_cv(
                         .with_columns(pl.col("new_stay_id").alias("stay_id"))
                         .drop(["new_stay_id", "base_stay_id"])
                     )
+
+                    # [DEBUG]
+                    # ===== DEBUG FEATURE JOIN =====
+                    print("\n================ DEBUG FEATURE JOIN ================")
+                    print("original_train_features rows:", original_train_features.height)
+                    print(
+                        "original_train_features unique stays:",
+                        original_train_features.select(pl.col("stay_id").n_unique()).item(),
+                    )
+                    print("downsampled_features rows:", downsampled_features.height)
+                    print(
+                        "downsampled_features unique stays:",
+                        downsampled_features.select(pl.col("stay_id").n_unique()).item(),
+                    )
+
+                    # check if join produced missing feature rows
+                    some_feature = next(c for c in downsampled_features.columns if c != "stay_id")
+                    print(
+                        "nulls in one feature column",
+                        some_feature,
+                        ":",
+                        downsampled_features.select(pl.col(some_feature).is_null().sum()).item(),
+                    )
+                    print("====================================================\n")
+                    # [DEBUG]
 
                     # Sanity: number of stays in FEATURES should match number of sampled stays (not number of outcome rows)
                     n_feat_stays = downsampled_features.select(pl.col("stay_id").n_unique()).item()
@@ -245,6 +287,12 @@ def execute_repeated_cv(
 
                     print(f"\n✅ PREPROCESSED DATA SAVED to: {folder_path}\n")
 
+                # After either loading cached subset OR generating+saving it
+                if subset_only:
+                    logging.info("Subset-only mode: exiting before CV/training.")
+                    return float("nan")
+                start_time = datetime.now()
+
             # ======================= #
             else:
                 start_time = datetime.now()
@@ -265,7 +313,7 @@ def execute_repeated_cv(
                 )
                 preprocess_time = datetime.now() - start_time
             
-            start_time = datetime.now()
+
             agg_loss += train_common(
                 data,
                 log_dir=repetition_fold_dir,

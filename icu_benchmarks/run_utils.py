@@ -118,6 +118,20 @@ def build_parser() -> ArgumentParser:
         help="Optional modality selection to use. Specify multiple modalities separated by spaces.",
     )
     parser.add_argument("--label", type=str, help="Label to use for evaluation in case of multiple labels.", default=None)
+    parser.add_argument(
+        "--subset_balance",
+        type=str,
+        default="equal",
+        choices=["preserve", "equal"],
+        help="Class balance for training subset. 'preserve' keeps original prevalence, 'equal' forces 50/50."
+    )
+    parser.add_argument(
+        "--subset_only",
+        default=True,
+        action=BOA,   # BooleanOptionalAction
+        help="Only generate and cache training subsets, then exit before CV/training."
+    )
+
     return parser
 
 
@@ -358,7 +372,7 @@ def check_required_keys(vars, required_keys):
     if missing_keys:
         raise KeyError(f"Missing required keys in vars: {', '.join(missing_keys)}")
 
-SHIFT = 1_000_000_000  # used to make duplicated stay occurrences unique
+SHIFT = 1_000_000_000_000  # used to make duplicated stay occurrences unique
 
 def _make_unique_int64_by_offset(
     df_in: pl.DataFrame,
@@ -412,6 +426,7 @@ def downsample_binary_classification(
     seed: Optional[int] = None,
     id_col: str = "stay_id",
     shift: int = SHIFT,
+    balance_mode: str = "preserve",
 ) -> pl.DataFrame:
     """
     Mortality24: single-row-per-stay classification.
@@ -435,10 +450,26 @@ def downsample_binary_classification(
         total_original += c
 
     # Target samples per class
-    label_to_n = {
-        label: int(round((count / total_original) * total_samples))
-        for label, count in label_counts.items()
-    }
+    labels = sorted(df[label_col].unique().to_list())
+    if len(labels) != 2:
+        raise ValueError(f"Expected binary labels, got {labels}")
+
+    # Count classes
+    label_counts = {lab: df.filter(pl.col(label_col) == lab).height for lab in labels}
+
+    if balance_mode == "preserve":
+        total_original = sum(label_counts.values())
+        label_to_n = {
+            lab: int(round((label_counts[lab] / total_original) * total_samples))
+            for lab in labels
+        }
+
+    elif balance_mode == "equal":
+        half = total_samples // 2
+        label_to_n = {labels[0]: half, labels[1]: total_samples - half}  # sums exactly
+
+    else:
+        raise ValueError(f"Unknown balance_mode='{balance_mode}' (use 'preserve' or 'equal')")
 
     # Fix rounding to sum exactly total_samples
     current = sum(label_to_n.values())
@@ -468,13 +499,11 @@ def downsample_binary_classification(
 
     combined = pl.concat(samples)
 
-    # Make duplicate occurrences unique
+    # Make duplicate occurrences unique: 0 -> original, 1 -> +SHIFT, 2 -> +2*SHIFT, ...
     combined = combined.with_columns(
         pl.col(id_col).alias("stay_id_original")
     ).with_columns(
-        pl.cum_count("stay_id_original").over("stay_id_original").alias("_dup_ix")
-    ).with_columns(
-        (pl.col("_dup_ix") - pl.col("_dup_ix").min().over("stay_id_original")).alias("_dup_ix")
+        pl.col("stay_id_original").cum_count().over("stay_id_original").alias("_dup_ix")  # 0,1,2,... per original id
     )
 
     combined = _make_unique_int64_by_offset(
@@ -482,8 +511,9 @@ def downsample_binary_classification(
         id_col=id_col,
         original_id_col="stay_id_original",
         dup_ix_col="_dup_ix",
-        shift=shift,
+        shift=shift,  # SHIFT = 1_000_000_000
     ).drop(["_dup_ix", "stay_id_original"])
+
 
     # Shuffle output
     return combined.sample(n=combined.height, with_replacement=False, seed=seed)
@@ -496,6 +526,7 @@ def downsample_aki_classification(
     seed: Optional[int] = None,
     id_col: str = "stay_id",
     shift: int = SHIFT,
+    balance_mode: str = "preserve",
 ) -> pl.DataFrame:
     """
     AKI: multi-row-per-stay with boolean label (timestep-level).
@@ -529,10 +560,26 @@ def downsample_aki_classification(
         label_counts[lab] = c
         total_original += c
 
-    label_to_n = {
-        lab: int(round((count / total_original) * n_stays_to_sample))
-        for lab, count in label_counts.items()
-    }
+    labels = sorted(stay_level["stay_label"].unique().to_list())
+    if len(labels) != 2:
+        raise ValueError(f"Expected binary stay_label, got {labels}")
+
+    label_counts = {lab: stay_level.filter(pl.col("stay_label") == lab).height for lab in labels}
+
+    if balance_mode == "preserve":
+        total_original = sum(label_counts.values())
+        label_to_n = {
+            lab: int(round((label_counts[lab] / total_original) * n_stays_to_sample))
+            for lab in labels
+        }
+
+    elif balance_mode == "equal":
+        half = n_stays_to_sample // 2
+        label_to_n = {labels[0]: half, labels[1]: n_stays_to_sample - half}
+
+    else:
+        raise ValueError(f"Unknown balance_mode='{balance_mode}'")
+
 
     # Fix rounding
     current = sum(label_to_n.values())
@@ -563,10 +610,9 @@ def downsample_aki_classification(
 
     # duplicate index per stay occurrence
     sampled_stays = sampled_stays.with_columns(
-        pl.cum_count(id_col).over(id_col).alias("_dup_ix")
-    ).with_columns(
-        (pl.col("_dup_ix") - pl.col("_dup_ix").min().over(id_col)).alias("_dup_ix")
-    )
+        pl.col(id_col).cum_count().over(id_col).alias("_dup_ix")
+        )
+
 
     # expand to rows
     result = sampled_stays.join(df, on=id_col, how="left").with_columns(
@@ -612,6 +658,7 @@ def downsample_outcome_by_task(
     task_name: str,
     subset_size: int,
     subset_seed: int,
+    balance_mode: str = "preserve",  # "preserve" or equal  
 ) -> pl.DataFrame:
 
     if task_name == "Mortality24":
@@ -620,6 +667,7 @@ def downsample_outcome_by_task(
             label_col="label",
             total_samples=subset_size,
             seed=subset_seed,
+            balance_mode=balance_mode,
         )
     elif task_name == "AKI":
         return downsample_aki_classification(
@@ -627,6 +675,7 @@ def downsample_outcome_by_task(
             label_col="label",
             total_stays=subset_size,
             seed=subset_seed,
+            balance_mode=balance_mode,
         )
     elif task_name in ("LOS", "LengthOfStay"):
         return downsample_los_regression(
@@ -639,3 +688,51 @@ def downsample_outcome_by_task(
             f"Unknown task_name='{task_name}'. Expected one of: Mortality24, AKI, LOS."
         )
 
+def debug_subset_outcome(downsampled_outcome: pl.DataFrame, task_name: str, SHIFT: int):
+    print("\n================ DEBUG SUBSET OUTCOME ================")
+    print("task_name:", task_name)
+    print("rows_outcome:", downsampled_outcome.height)
+    print("unique stay_id:", downsampled_outcome.select(pl.col("stay_id").n_unique()).item())
+
+    # stay_id range + SHIFT sanity
+    min_id = downsampled_outcome.select(pl.col("stay_id").min()).item()
+    max_id = downsampled_outcome.select(pl.col("stay_id").max()).item()
+    print("stay_id range:", min_id, "->", max_id)
+    print("SHIFT:", SHIFT)
+
+    ge_shift = downsampled_outcome.filter(pl.col("stay_id") >= SHIFT).select(pl.len()).item()
+    lt0 = downsampled_outcome.filter(pl.col("stay_id") < 0).select(pl.len()).item()
+    print("rows with stay_id >= SHIFT:", ge_shift)
+    print("rows with stay_id < 0:", lt0)
+
+    # Task-specific label checks
+    if task_name == "Mortality24":
+        # one row per stay (should be)
+        print("\n[MORTALITY24] label counts (rows):")
+        print(downsampled_outcome.group_by("label").len().sort("label"))
+
+    elif task_name == "AKI":
+        # timestep label counts (can be skewed)
+        print("\n[AKI] timestep-level label counts (rows):")
+        print(downsampled_outcome.group_by("label").len().sort("label"))
+
+        # stay-level label = any(label)
+        stay_level = (
+            downsampled_outcome.group_by("stay_id")
+            .agg(pl.col("label").max().alias("stay_label"))
+        )
+        print("\n[AKI] stay-level label counts (unique stays):")
+        print(stay_level.group_by("stay_label").len().sort("stay_label"))
+
+        # Oversampling / SHIFT check:
+        # base_stay_id should map shifted ids back to original ids
+        outcome_map = (
+            downsampled_outcome
+            .select(pl.col("stay_id").alias("new_stay_id"))
+            .unique()
+            .with_columns((pl.col("new_stay_id") % SHIFT).alias("base_stay_id"))
+        )
+        dup_base = outcome_map.group_by("base_stay_id").len().filter(pl.col("len") > 1).height
+        print("\n[AKI] base_stay_id duplicate count (oversampling indicator):", dup_base)
+
+    print("======================================================\n")

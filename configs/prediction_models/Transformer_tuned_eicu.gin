@@ -32,5 +32,3 @@ train_common.min_delta = 1e-4
 #execute_repeated_cv.enable_subset_train = True
 #execute_repeated_cv.subset_train_size = 1000 # 100, 500, 1000, 2000, 3000, 5000, 7000, 9000, 9506 
 #execute_repeated_cv.subset_train_seed = 42 # [42, 84, 126, 168, 210] 
-
-scp -i ~/.ssh/gbar -r s185395@transfer.gbar.dtu.dk:/work3/s185395/yaib_logs/eicu_mimic/LOS/SSL_BAT_tuned_eicu_mimic/2025-11-18T01-30-40/repetition_0/fold_0/model.ckpt /Users/katjajagd/Downloads/resubmission_neurips_results/models/SSL_eicu_mimic/model.ckpt

@@ -17,3 +17,8 @@ model/hyperparameter.n_estimators = 100000
 model/hyperparameter.num_leaves = (8, 128, "log", 2)
 model/hyperparameter.subsample = (0.33, 1.0)
 model/hyperparameter.subsample_freq = 1
+
+# Patience for early stopping
+MLWrapper.patience = 100
+train_common.patience = 100
+

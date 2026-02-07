@@ -1,8 +1,24 @@
 import pandas as pd
 import json
 
-model = "SSL_BAT_aki_head"
+model = "SSL_GRUD_m24_full"
 dataset = "hirid"
+
+
+# SSL BAT equal head hirid
+#file = "finetuning_results/pretrained_BAT/hirid/head/summary_bad3d11a02.csv" # 100-3000
+#file = "finetuning_results/pretrained_BAT/hirid/head/summary_78dd5e4efd.csv" # 100-9506
+
+# SSL BAT equal full hirid
+#file = "finetuning_results/pretrained_BAT/hirid/full/summary_d4362e16e7.csv" # 100-3000 
+
+# SSL GRUD equal head hirid
+#file = "finetuning_results/pretrained_GRUD/hirid/head/summary_bb020b5e2f.csv" # 100-3000
+#file = "finetuning_results/pretrained_GRUD/hirid/head/summary_ea101927e8.csv" # 100-9506
+
+# SSL GRUD equal fill hirid
+#file = "finetuning_results/pretrained_GRUD/hirid/full/summary_c561b31811.csv" # 100-3000
+file = "finetuning_results/pretrained_GRUD/hirid/full/summary_a45b6f452b.csv" # 100-9506
 
 # SSL GRUD aki head hirid
 #file = "finetuning_results/AKI/grud/hirid/head/summary_d73ed70ed4.csv" # 100-3000
@@ -13,8 +29,14 @@ dataset = "hirid"
 #file = "finetuning_results/AKI/grud/hirid/full/summary_e2f33e13ab.csv" # 100-9506
 
 # SSL BAT aki head hirid 
-file = "finetuning_results/AKI/bat/hirid/head/summary_a92e5f82a5.csv" # 100-3000
-#file = "" # 100-95096
+#file = "finetuning_results/AKI/bat/hirid/head/summary_a92e5f82a5.csv" # 100-3000 small lr
+#file = "" #100-5000 large lr 
+#file = "finetuning_results/AKI/bat/hirid/head/summary_1768cdcf22.csv" # 7000-95096
+
+# SSL BAT aki full hirid
+#file = "finetuning_results/AKI/bat/hirid/full/summary_2b282d4486.csv" # 100-5000 large lr
+#file = "finetuning_results/AKI/bat/hirid/full/summary_da63ce9d47.csv" # 100-3000 small lr 
+#file = "finetuning_results/AKI/bat/hirid/full/summary_317c77f6d1.csv" # 7000-9506 large lr
 
 # SSL_GRUD_m24_head_hirid
 #file = "finetuning_results/pretrained_GRUD/hirid/head/summary_44a1def579.csv" # 100-3000
