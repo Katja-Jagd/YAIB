@@ -184,6 +184,11 @@ class EncoderClassifierInverted(nn.Module):
         # Free memory
         del x_time_mask
 
+        # Pad time dimension to time_axis_dim_in if shorter (SSL obs windows are variable length;
+        # for non-SSL this is a no-op because T already equals max_timepoint_count)
+        if x_sensor.shape[2] < self.time_axis_dim_in:
+            x_sensor = torch.nn.functional.pad(x_sensor, (0, self.time_axis_dim_in - x_sensor.shape[2]))
+
         # Make embedding of time dimension - process entire time series at once
         # This compresses the time dimension from time_axis_dim_in to time_axis_dim
         x_sensor = self.time_embedding(x_sensor)  # (N, F, time_axis_dim)
@@ -506,10 +511,18 @@ class SSL_iTransformer(SSLWrapper):
         super().__init__(lr=lr, optimizer=optimizer, *args, **kwargs)
         self.save_hyperparameters()
 
+        raise NotImplementedError(
+        "SSL_iTransformer is currently under development due to "
+        "architectural restrictions regarding timepoints."
+        )
+
+        """
         # Extract dimensions from dataset
         # input_size is (N, F, T) where N=batch, F=sensors, T=actual_timepoints
+        # For SSL the observation window is variable (12–max_obs per batch), so we
+        # size the linear projection to max_obs (24) rather than the first batch's T.
         sensors_count = input_size[1]
-        actual_timepoint_count = input_size[2]
+        max_obs = 24  # must match SSLPolarsDataset.max_obs
         static_count = kwargs.get("static_count", 4)
         use_static = kwargs.get("use_static", True)
         obs_strategy = kwargs.get("obs_strategy", "both")
@@ -525,7 +538,7 @@ class SSL_iTransformer(SSLWrapper):
             attn_dropout=attn_dropout,
             use_mask=use_mask,
             sensors_count=sensors_count,
-            max_timepoint_count=actual_timepoint_count,
+            max_timepoint_count=max_obs,
             static_count=static_count,
             use_static=use_static,
             obs_strategy=obs_strategy,
@@ -540,7 +553,8 @@ class SSL_iTransformer(SSLWrapper):
 
     def forward(self, data, static, time, sensor_mask):
         return self.model(data, static=static, time=time, sensor_mask=sensor_mask)
-
+    """
+        
 
 @gin.configurable
 class Autoregressive_iTransformer(CustomDLPredictionWrapper):
