@@ -54,7 +54,6 @@ def execute_repeated_cv(
     dataset_name: str = None, # ADDED FOR ORGANIZING PREPROCESSED DATA BY DATASET NAME
     stop_after_first_fold: bool = False,
 ) -> float:
-    print(enable_subset_train, subset_train_size, subset_train_seed)
     """Preprocesses data and trains a model for each fold.
 
     Args:
