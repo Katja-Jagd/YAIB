@@ -156,3 +156,12 @@ finetuning_results/*
 icu_benchmarks/tuning/hp_tuning_results/
 
 DELETE*
+
+# Do not allow any data except demo_data
+*.zip
+*.parquet
+
+!demo_data/
+demo_data/*
+!demo_data/**/*.zip
+!demo_data/**/*.parquet
