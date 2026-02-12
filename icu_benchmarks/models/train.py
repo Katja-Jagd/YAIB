@@ -99,12 +99,9 @@ def train_common(
     logging.info(f"Logging to directory: {log_dir}.")
     save_config_file(log_dir)  # We save the operative config before and also after training
     
-    # tmp [DEBUG]
-    ram_cache=False #FORCE FALSE NOMATTER GIN
-    verbose = True # FORCE TRYE NOMATTER GIN 
-    #num_workers = 1 # FORCE TRYE NOMATTER GIN 
-    #persistent_workers=True # FORCE TRYE NOMATTER GIN
-    #print(f"persistent_workers: {persistent_workers}") 
+    ram_cache=False
+    verbose = True 
+
 
     train_dataset = dataset_class(data, split=Split.train, ram_cache=ram_cache, name=dataset_names["train"])
     val_dataset = dataset_class(data, split=Split.val, ram_cache=ram_cache, name=dataset_names["val"])
@@ -173,7 +170,14 @@ def train_common(
         loggers.append(WandbLogger(save_dir=log_dir))
     callbacks = [
         EarlyStopping(monitor="val/loss", min_delta=min_delta, patience=patience, strict=False, verbose=verbose),
-        ModelCheckpoint(log_dir, filename="model", save_top_k=1, save_last=True),
+        ModelCheckpoint(
+            log_dir,
+            filename="model",
+            monitor="val/loss",
+            mode="min",
+            save_top_k=1,
+            save_last=True
+        ),
         LearningRateMonitor(logging_interval="step"),
     ]
     #loggers = [] # tmp [DEBUG]
