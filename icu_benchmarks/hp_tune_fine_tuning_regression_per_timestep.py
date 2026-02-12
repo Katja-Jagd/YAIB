@@ -28,32 +28,19 @@ from icu_benchmarks.models.dl_models.grud import (
     GRUDEncoderPrediction,
 )
 
-# ----------------------------------------------------
-# Variable map
-# ----------------------------------------------------
-VARS_DICT = {
-    "GROUP": "stay_id",
-    "SEQUENCE": "time",
-    "LABEL": "label",
-    "DYNAMIC": [
-        "alb","alp","alt","ast","be","bicar","bili","bili_dir","bnd","bun","ca","cai","ck","ckmb","cl",
-        "crea","crp","dbp","fgn","fio2","glu","hgb","hr","inr_pt","k","lact","lymph","map","mch",
-        "mchc","mcv","methb","mg","na","neut","o2sat","pco2","ph","phos","plt","po2","ptt","resp",
-        "sbp","temp","tnt","urine","wbc"
-    ],
-    "STATIC": ["age", "sex", "height", "weight"],
-}
+# Import shared utilities
+from icu_benchmarks.fine_tuning_utils import (
+    VARS_DICT,
+    set_seeds,
+    load_subset,
+    build_datasets as build_datasets_shared,
+)
+
+# Note: VARS_DICT, set_seeds, load_subset imported from fine_tuning_utils
 
 # ----------------------------------------------------
 # Utilities
 # ----------------------------------------------------
-def set_seeds(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 def rmse_mae(y_true: np.ndarray, y_pred: np.ndarray):
@@ -67,24 +54,11 @@ def rmse_mae(y_true: np.ndarray, y_pred: np.ndarray):
     return rmse, mae
 
 
-def load_subset(dataset, task, size, seed, subset_root):
-    path = Path(subset_root) / task / dataset / f"{size}_{seed}"
-    data = {}
-    for split in ["train", "val", "test"]:
-        o = path / f"{split}_OUTCOME.parquet"
-        f = path / f"{split}_FEATURES.parquet"
-        if not o.exists() or not f.exists():
-            raise FileNotFoundError(f"Missing required files for {split} in {path}")
-        data[split] = {"OUTCOME": pl.read_parquet(o), "FEATURES": pl.read_parquet(f)}
-    return data
-
+# Removed: load_subset - now imported from fine_tuning_utils
 
 def build_datasets(data):
-    return (
-        BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT),
-        BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT),
-        BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT),
-    )
+    """Wrapper for regression datasets."""
+    return build_datasets_shared(data, runmode=RunMode.regression, vars_dict=VARS_DICT)
 
 
 def state_dict_transfer_report(model: torch.nn.Module, loaded_state: dict) -> dict:
