@@ -289,7 +289,7 @@ The following section lays out the exact command needed to reproduce the results
 The final pre-trained models can be found at: https://huggingface.co/Katja-Jagd/models#repos
 
 ### Pooling datasets
-To pool the datasets used for pre-training following the instructions of `YAIB/icu_benchmarks/data/dataset_pooling.ipynb`
+To pool the datasets used for pre-training following the instructions of `YAIB/notebooks/data_preprocessing/dataset_pooling.ipynb`
 
 ### Pre-training  
 ```
@@ -447,12 +447,12 @@ When the baselines models are trained, data subsets for the 5 seeds are generate
 After runing pre-training, finetuning for each of the held-out datasets can be achieved with the following commands
 ```
 # Fine-tune on MIMIC-III, binary classification head
-python icu_benchmarks/fine_tuning.py \
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $MIMIC-III_MODEL_DIR/model.ckpt \
   --dataset mimic \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
   --seeds 42,84,126,168,210 \
-  --fine_tune_head 
+  --fine_tune_head
   --bz 64 \
   --lr 1e-02
   --num_epochs 200 \
@@ -460,7 +460,7 @@ python icu_benchmarks/fine_tuning.py \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
 # Fine-tune on MIMIC-III, full model
-python icu_benchmarks/fine_tuning.py \
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $MIMIC-III_MODEL_DIR/model.ckpt \
   --dataset mimic \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
@@ -472,20 +472,20 @@ python icu_benchmarks/fine_tuning.py \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
 # Fine-tune on MIMIC-IV, binary classification head
-python icu_benchmarks/fine_tuning.py \
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $MIMIC-IV_MODEL_DIR/model.ckpt \
   --dataset miiv \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
   --seeds 42,84,126,168,210 \
-  --fine_tune_head 
+  --fine_tune_head
   --bz 64 \
   --lr 5e-3 \
   --num_epochs 200 \
   --subset_root $PREPROCESSED_SUBSET_DATA_DIR \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
-# Fine-tune on MIMIC-IV, full model 
-python icu_benchmarks/fine_tuning.py \
+# Fine-tune on MIMIC-IV, full model
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $MIMIC-IV_MODEL_DIR/model.ckpt \
   --dataset miiv \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
@@ -497,12 +497,12 @@ python icu_benchmarks/fine_tuning.py \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
 # Fine-tune on eICU, binary classification head
-python icu_benchmarks/fine_tuning.py \
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $EICU_MODEL_DIR/model.ckpt \
   --dataset eicu \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
   --seeds 42,84,126,168,210 \
-  --fine_tune_head 
+  --fine_tune_head
   --bz 24 \
   --lr 7e-3 \
   --num_epochs 200 \
@@ -510,7 +510,7 @@ python icu_benchmarks/fine_tuning.py \
   --gin_config /YAIB/configs/tasks/BinaryClassification.gin
 
 # Fine-tune on eICU, full model
-python icu_benchmarks/fine_tuning.py \
+python icu_benchmarks/fine_tuning_classification.py \
   --model_path $EICU_MODEL_DIR/model.ckpt \
   --dataset eicu \
   --sizes 100,500,1000,2000,3000,5000,7000,9000,9506 \
