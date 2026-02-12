@@ -25,7 +25,7 @@ TASK_TO_GIN_MAPPING = {
     "Mortality24": "BinaryClassification",
     "AKI": "TimestepBinaryClassification",
     "TimestepBinaryClassification": "TimestepBinaryClassification",
-    "Sepsis": "BinaryClassification",
+    "Sepsis": "TimestepBinaryClassification",
     # Regression tasks
     "KidneyFunction": "Regression",
     "LengthOfStay": "LengthOfStay",  # Has its own specialized gin
