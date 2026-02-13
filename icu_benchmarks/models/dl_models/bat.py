@@ -172,32 +172,28 @@ class PositionalEncodingTF(nn.Module):
         self._num_timescales = d_model // 2
 
     def getPE(self, P_time):
-        #print("P_time shape:", P_time.shape) # [DEBUG]
         B = P_time.shape[1]
 
         P_time = P_time.float()
+        device = P_time.device
 
         # create a timescale of all times from 0-1
         timescales = self.max_len ** np.linspace(0, 1, self._num_timescales)
 
         # make a tensor to hold the time embeddings
-        times = torch.Tensor(P_time.cpu()).unsqueeze(2)
+        times = P_time.unsqueeze(2)
 
         # scale the timepoints according to the 0-1 scale
-        scaled_time = times / torch.Tensor(timescales[None, None, :])
+        scaled_time = times / torch.tensor(timescales, device=device, dtype=torch.float32)[None, None, :]
         # Use a 32-D embedding to represent a single time point
         pe = torch.cat(
             [torch.sin(scaled_time), torch.cos(scaled_time)], axis=-1
         )  # T x B x d_model
-        pe = pe.type(torch.FloatTensor)
 
         return pe
 
     def forward(self, P_time):
-        #print("[DEBUG] PositionalEncodingTF input shape:", P_time.shape)
-        #print("[DEBUG] Min/max time:", P_time.min().item(), P_time.max().item())
         pe = self.getPE(P_time)
-        # pe = pe.cuda()
         return pe
 
 @gin.configurable

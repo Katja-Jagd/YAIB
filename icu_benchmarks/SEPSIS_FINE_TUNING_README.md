@@ -87,8 +87,8 @@ python icu_benchmarks/fine_tuning.py \
 
 **Arguments:**
 - `--task`: Task type - determines prediction head and label handling
-  - `Sepsis`: Timestep-level prediction using `TimeseriesClassificationHead`
-  - `Mortality24`, `Mortality`, `AKI`: Patient-level prediction using `BinaryClassificationHead`
+  - `Sepsis`, `AKI`: Timestep-level prediction using `TimeseriesClassificationHead` (hourly predictions within 6H window)
+  - `Mortality24`, `Mortality`: Patient-level prediction using `BinaryClassificationHead`
 - `--fine_tune_head`: (Optional) Only fine-tune the classification head, freeze encoder
 - `--dataset`: Dataset name (e.g., `mimic`, `eicu`, `miiv`)
 - `--sizes`: Training set sizes (comma-separated or range format `100:5000:100`)
@@ -133,7 +133,7 @@ Model outputs: [(B,T,C)] -> predictions at each timestep
 **1. Task parameter determines model architecture:**
 ```python
 # In build_model_from_ckpt()
-TIMESTEP_TASKS = {"Sepsis"}  # Line 147
+TIMESTEP_TASKS = {"Sepsis", "AKI"}  # Line 152
 
 if task in TIMESTEP_TASKS:
     # Sepsis: TimeseriesClassificationHead
