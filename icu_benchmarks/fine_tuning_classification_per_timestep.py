@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-# fine_tuning_aki_timestep_classification.py
+# fine_tuning_classification_per_timestep.py
 #
-# Fine-tuning script for AKI (per-timestep binary classification).
+# Fine-tuning script for per-timestep binary classification tasks (e.g., AKI).
 # Uses BAT autoregressive encoder (no pooling) or GRU-D pooling="none".
 #
 # Metrics: AUROC/AUPRC computed over ALL valid timesteps across the split (flattened),
@@ -29,6 +29,15 @@ import torch.nn.functional as F
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.loader import BATPolarsDataset
 
+# Import shared utilities
+from icu_benchmarks.fine_tuning_utils import (
+    VARS_DICT,
+    set_seeds,
+    load_subset_as_data_dict,
+    build_datasets as build_datasets_shared,
+    parse_int_list,
+)
+
 # BAT
 from icu_benchmarks.models.dl_models.bat import (
     AutoregressiveEncoderCrossParallel,
@@ -43,63 +52,14 @@ from icu_benchmarks.models.dl_models.grud import (
 )
 
 # -------------------------
-# Configurable variable map
-# -------------------------
-VARS_DICT = {
-    "GROUP": "stay_id",
-    "SEQUENCE": "time",
-    "LABEL": "label",
-    "DYNAMIC": [
-        "alb","alp","alt","ast","be","bicar","bili","bili_dir","bnd","bun","ca","cai","ck","ckmb","cl",
-        "crea","crp","dbp","fgn","fio2","glu","hgb","hr","inr_pt","k","lact","lymph","map","mch","mchc","mcv",
-        "methb","mg","na","neut","o2sat","pco2","ph","phos","plt","po2","ptt","resp","sbp","temp","tnt","urine","wbc"
-    ],
-    "STATIC": ["age", "sex", "height", "weight"],
-}
+# Note: VARS_DICT, set_seeds, load_subset_as_data_dict, parse_int_list imported from fine_tuning_utils
 
 # -------------------------
 # Utilities
 # -------------------------
-def set_seeds(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-def load_subset_as_data_dict(base_dir: Path) -> Dict[str, Dict[str, pl.DataFrame]]:
-    data = {}
-    for split in ["train", "val", "test"]:
-        outcome_path = base_dir / f"{split}_OUTCOME.parquet"
-        features_path = base_dir / f"{split}_FEATURES.parquet"
-        if not outcome_path.exists() or not features_path.exists():
-            raise FileNotFoundError(
-                f"Missing files for split '{split}'. Expected:\n  {outcome_path}\n  {features_path}"
-            )
-        data[split] = {
-            "OUTCOME": pl.read_parquet(outcome_path),
-            "FEATURES": pl.read_parquet(features_path),
-        }
-    return data
-
-
 def build_datasets(data: Dict[str, Dict[str, pl.DataFrame]]) -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
-    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
-    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
-    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.classification, vars=VARS_DICT)
-    return train_set, val_set, test_set
-
-
-def parse_int_list(arg: str) -> List[int]:
-    s = arg.strip()
-    if ":" in s:
-        start, stop, step = [int(x) for x in s.split(":")]
-        return list(range(start, stop + (1 if step > 0 else -1), step))
-    if "," in s:
-        return [int(x.strip()) for x in s.split(",") if x.strip()]
-    return [int(s)]
+    """Wrapper around shared build_datasets with classification mode."""
+    return build_datasets_shared(data, runmode=RunMode.classification, vars_dict=VARS_DICT)
 
 
 def maybe_extract_obs_mask(rest: List[object], label_T: int, device: torch.device) -> Optional[torch.Tensor]:

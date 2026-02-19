@@ -20,6 +20,15 @@ from torch.utils.data import DataLoader
 from icu_benchmarks.constants import RunMode
 from icu_benchmarks.data.loader import BATPolarsDataset
 
+# Import shared utilities
+from icu_benchmarks.fine_tuning_utils import (
+    VARS_DICT,
+    set_seeds,
+    load_subset_as_data_dict,
+    build_datasets as build_datasets_shared,
+    parse_int_list,
+)
+
 # [DEBUG]
 def state_dict_transfer_report(model: torch.nn.Module, loaded_state: dict) -> dict:
     """
@@ -188,20 +197,7 @@ from icu_benchmarks.models.dl_models.grud import (
 )
 
 
-# -------------------------
-# Configurable variable map
-# -------------------------
-VARS_DICT = {
-    "GROUP": "stay_id",
-    "SEQUENCE": "time",
-    "LABEL": "label",
-    "DYNAMIC": [
-        "alb","alp","alt","ast","be","bicar","bili","bili_dir","bnd","bun","ca","cai","ck","ckmb","cl",
-        "crea","crp","dbp","fgn","fio2","glu","hgb","hr","inr_pt","k","lact","lymph","map","mch","mchc","mcv",
-        "methb","mg","na","neut","o2sat","pco2","ph","phos","plt","po2","ptt","resp","sbp","temp","tnt","urine","wbc"
-    ],
-    "STATIC": ["age", "sex", "height", "weight"],
-}
+# Note: VARS_DICT, set_seeds, load_subset_as_data_dict, parse_int_list imported from fine_tuning_utils
 
 MODEL_REGISTRY = {
     "bat": {
@@ -218,52 +214,11 @@ MODEL_REGISTRY = {
 # -------------------------
 # Utilities
 # -------------------------
-def set_seeds(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-def load_subset_as_data_dict(base_dir: Path) -> Dict[str, Dict[str, pl.DataFrame]]:
-    """
-    Expects layout:
-      base_dir/
-        train_OUTCOME.parquet
-        train_FEATURES.parquet
-        val_OUTCOME.parquet
-        val_FEATURES.parquet
-        test_OUTCOME.parquet
-        test_FEATURES.parquet
-    Returns a dict compatible with BATPolarsDataset.
-    """
-    data = {}
-    for split in ["train", "val", "test"]:
-        outcome_path = base_dir / f"{split}_OUTCOME.parquet"
-        features_path = base_dir / f"{split}_FEATURES.parquet"
-
-        if not outcome_path.exists() or not features_path.exists():
-            raise FileNotFoundError(
-                f"Missing files for split '{split}'. "
-                f"Expected:\n  {outcome_path}\n  {features_path}"
-            )
-
-        data[split] = {
-            "OUTCOME": pl.read_parquet(outcome_path),
-            "FEATURES": pl.read_parquet(features_path),
-        }
-    return data
-
-
 def build_datasets(
     data: Dict[str, Dict[str, pl.DataFrame]],
 ) -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
-    train_set = BATPolarsDataset(data=data, split="train", ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
-    val_set   = BATPolarsDataset(data=data, split="val",   ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
-    test_set  = BATPolarsDataset(data=data, split="test",  ram_cache=False, runmode=RunMode.regression, vars=VARS_DICT)
-    return train_set, val_set, test_set
+    """Wrapper around shared build_datasets with regression mode."""
+    return build_datasets_shared(data, runmode=RunMode.regression, vars_dict=VARS_DICT)
 
 
 def rmse_mae(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[float, float]:
@@ -698,14 +653,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
     )
 
 
-def parse_int_list(arg: str) -> List[int]:
-    s = arg.strip()
-    if ":" in s:
-        start, stop, step = [int(x) for x in s.split(":")]
-        return list(range(start, stop + (1 if step > 0 else -1), step))
-    if "," in s:
-        return [int(x.strip()) for x in s.split(",") if x.strip()]
-    return [int(s)]
+# Removed: Using imported parse_int_list from fine_tuning_utils
 
 
 def main():
