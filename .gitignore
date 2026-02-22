@@ -155,6 +155,10 @@ preprocessed_data/
 finetuning_results/*
 icu_benchmarks/tuning/hp_tuning_results/
 
+delete*
+dm*.py*
+summarize*.py* 
+
 DELETE*
 delete*
 dm*

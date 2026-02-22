@@ -51,7 +51,7 @@ train_common.dataset_class = @SSLPolarsDataset
 tune_hyperparameters.scopes = ["model", "optimizer"]  # defines the scopes that the random search runs in
 tune_hyperparameters.n_initial_points = 5  # defines random points to initilaize gaussian process
 tune_hyperparameters.n_calls = 10  # number of iterations to find best set of hyperparameters
-tune_hyperparameters.folds_to_tune_on = 2  # number of folds to use to evaluate set of hyperparameters
+tune_hyperparameters.folds_to_tune_on = 1  # number of folds to use to evaluate set of hyperparameters
 
 # CV params 
 execute_repeated_cv.cv_repetitions = 1
