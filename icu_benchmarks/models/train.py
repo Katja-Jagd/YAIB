@@ -19,6 +19,15 @@ from icu_benchmarks.data.constants import DataSplit as Split
 import random #[DEBUG]
 cpu_core_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
 
+def _select_monitor_metric(run_mode: str) -> tuple[str, str]:
+    """
+    Choose which metric to monitor for EarlyStopping/ModelCheckpoint based on run_mode.
+    - classification: monitor val/PR (maximize)
+    - regression/imputation/other: monitor val/loss (minimize)
+    """
+    if run_mode == RunMode.classification:
+        return "val/PR", "max" # val/PR max
+    return "val/loss", "min"
 
 def assure_minimum_length(dataset):
     if len(dataset) < 2:
@@ -168,15 +177,28 @@ def train_common(
         ]
     if use_wandb:
         loggers.append(WandbLogger(save_dir=log_dir))
+    monitor_key, monitor_mode = _select_monitor_metric(mode)
+    logging.info(
+        f"[Callbacks] Monitoring metric: '{monitor_key}' (mode='{monitor_mode}') "
+        "for EarlyStopping/Checkpoint."
+    )
+
     callbacks = [
-        EarlyStopping(monitor="val/loss", min_delta=min_delta, patience=patience, strict=False, verbose=verbose),
+        EarlyStopping(
+            monitor=monitor_key,
+            mode=monitor_mode,
+            min_delta=min_delta,
+            patience=patience,
+            strict=False,
+            verbose=verbose,
+        ),
         ModelCheckpoint(
-            log_dir,
-            filename="model",
-            monitor="val/loss",
-            mode="min",
+            dirpath=log_dir,
+            filename=f"best-{{epoch:02d}}-{{{monitor_key}:.4f}}",
+            monitor=monitor_key,
+            mode=monitor_mode,
             save_top_k=1,
-            save_last=True
+            save_last=True,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
