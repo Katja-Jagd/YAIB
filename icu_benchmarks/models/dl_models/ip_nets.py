@@ -715,8 +715,8 @@ class IPNetsEncoderPrediction(nn.Module):
         predictions = self.head(features)
 
         # Return both predictions and reconstruction loss for custom loss handling
-        return predictions, reconstruction_loss
-
+        return predictions, reconstruction_loss # use this for pre-training
+        #return predictions # Use this for finetuning
 
 class AutoregressiveIPNetsEncoderPrediction(nn.Module):
     """
