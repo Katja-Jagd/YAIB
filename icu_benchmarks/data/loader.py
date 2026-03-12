@@ -949,7 +949,7 @@ class SSLBatchCollator:
 
 @gin.configurable("SSLPolarsDataset")
 class SSLPolarsDataset(BATPolarsDataset):
-    def __init__(self, *args, max_obs=24, forecast_horizon=2, runmode=None, **kwargs):
+    def __init__(self, *args, max_obs=25, forecast_horizon=2, runmode=None, **kwargs):
         
         #SSL dataset that slices each batch into observation and forecasting windows.
 
