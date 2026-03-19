@@ -30,6 +30,7 @@ from icu_benchmarks.models.dl_models.bat import (
     BinaryClassificationHead,
     TimeseriesClassificationHead,
 )
+from icu_benchmarks.data.constants import DataSplit as Split
 from icu_benchmarks.models.dl_models.grud import SSL_GRUD, GRUDEncoderPrediction
 from icu_benchmarks.models.dl_models.radv_transformer import SSL_RadVTransformer
 from icu_benchmarks.models.dl_models.itransformer import SSL_iTransformer, EncoderPredictionInverted
@@ -42,13 +43,10 @@ from icu_benchmarks.models.dl_models.deep_set_attention import (
 # -------------------------
 # Import shared utilities
 # -------------------------
-from icu_benchmarks.fine_tuning_utils import (
-    VARS_DICT,
-    set_seeds,
-    load_subset_as_data_dict,
-    build_datasets as build_datasets_shared,
-    parse_int_list,
-)
+from icu_benchmarks.fine_tuning_utils import set_seeds
+from icu_benchmarks.data.split_process_data import preprocess_data
+from icu_benchmarks.run_utils import get_task_gin_and_name
+from icu_benchmarks.cross_validation import execute_repeated_cv
 
 MODEL_REGISTRY = {
     "bat": {
@@ -88,7 +86,7 @@ MODEL_REGISTRY = {
 # Utilities
 # -------------------------
 def parse_gin_config(gin_path: str):
-    """Parse a gin config and make relative `include` paths work."""
+    """Parse a gin config and make relative include paths work."""
     gin.clear_config()
     p = Path(gin_path).resolve()
 
@@ -116,13 +114,10 @@ def parse_gin_config(gin_path: str):
 
     gin.parse_config_file(str(p))
 
-
-def build_datasets(
-    data: Dict[str, Dict[str, pl.DataFrame]]
-) -> Tuple[BATPolarsDataset, BATPolarsDataset, BATPolarsDataset]:
-    """Wrapper around shared build_datasets with classification mode."""
-    return build_datasets_shared(data, runmode=RunMode.classification, vars_dict=VARS_DICT)
-
+def assure_minimum_length(dataset):
+    if len(dataset) < 2:
+        return [dataset[0], dataset[0]]
+    return dataset
 
 def parse_float_list(s: str) -> List[float]:
     return [float(x.strip()) for x in s.split(",") if x.strip()]
@@ -228,12 +223,15 @@ def build_model_from_ckpt(
     )
     return model
 
+@gin.configurable("Run")
+def get_mode(mode: gin.REQUIRED):
+    assert RunMode(mode)
+    return RunMode(mode)
 
 @dataclass
 class RunConfig:
+    data_dir: str
     dataset: str
-    size: int
-    seed: int
     model_path: str
     model_type: str
     fine_tune_head: bool
@@ -244,19 +242,26 @@ class RunConfig:
     attn_dropout: float
     num_epochs: int
     patience: int
-    subset_root: str
     output_dir: str
     task: str = "Mortality24"
     debug_pause: bool = False
     sweep_idx: int = 0
+
+    # split/preprocessing controls
+    split_seed: int = 2222
+    cv_repetitions: int = 1
+    cv_folds: int = 5
+    fold_index: int = 0
+    repetition_index: int = 0
+    debug: bool = False
+    load_cache: bool = False
+    generate_cache: bool = False
 
 
 @dataclass
 class RunResult:
     dataset: str
     task: str
-    size: int
-    seed: int
     sweep_idx: int
     batch_size: int
     lr: float
@@ -266,6 +271,7 @@ class RunResult:
     num_epochs: int
     fine_tune_head: bool
     model_path: str
+    data_dir: str
     best_val_loss: float
     best_val_auroc: float
     best_val_auprc: float
@@ -280,13 +286,33 @@ def safe_binary_metrics(labels: List[int], probs: List[float]) -> Tuple[float, f
 
 
 def train_eval_one(config: RunConfig) -> RunResult:
-    # Keep subset variability only; make training procedure deterministic
+    # Keep training deterministic
     set_seeds(42)
 
-    subset_path = Path(config.subset_root) / config.task / config.dataset / f"{config.size}_{config.seed}"
-    data = load_subset_as_data_dict(subset_path)
+    data = preprocess_data(
+        Path(config.data_dir),
+        seed=config.split_seed,
+        debug=config.debug,
+        load_cache=config.load_cache,
+        generate_cache=config.generate_cache,
+        cv_repetitions=config.cv_repetitions,
+        repetition_index=config.repetition_index,
+        train_size=None,
+        cv_folds=config.cv_folds,
+        fold_index=config.fold_index,
+        pretrained_imputation_model=None,
+        runmode=RunMode.classification,
+        complete_train=False,
+    )
 
-    train_set, val_set, _ = build_datasets(data)
+    train_set = BATPolarsDataset(data, split=Split.train, ram_cache=False, name=f"{config.dataset}_train")
+    val_set = BATPolarsDataset(data, split=Split.val, ram_cache=False, name=f"{config.dataset}_val")
+
+    train_collate = train_set.collate_fn_pad_to_longest_in_batch()
+    val_collate = val_set.collate_fn_pad_to_longest_in_batch()
+
+    train_set = assure_minimum_length(train_set)
+    val_set = assure_minimum_length(val_set)
 
     if config.debug_pause:
         input("Press Enter to continue...")
@@ -297,14 +323,15 @@ def train_eval_one(config: RunConfig) -> RunResult:
         batch_size=config.batch_size,
         shuffle=True,
         generator=g,
-        collate_fn=train_set.collate_fn_pad_to_longest_in_batch(),
+        drop_last=True,
+        collate_fn=train_collate,
     )
     val_loader = DataLoader(
         val_set,
         batch_size=config.batch_size,
-        shuffle=True,
-        generator=g,
-        collate_fn=val_set.collate_fn_pad_to_longest_in_batch(),
+        shuffle=False,
+        drop_last=True,
+        collate_fn=val_collate,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -499,8 +526,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
 
     print(
         "\nBEST VAL RESULTS "
-        f"(dataset={config.dataset}, task={config.task}, size={config.size}, "
-        f"seed={config.seed}, sweep={config.sweep_idx}): "
+        f"(dataset={config.dataset}, task={config.task}, sweep={config.sweep_idx}): "
         f"epoch={best_epoch} loss={best_val_loss:.4f} "
         f"auroc={best_val_auroc:.4f} auprc={best_val_auprc:.4f}"
     )
@@ -508,8 +534,6 @@ def train_eval_one(config: RunConfig) -> RunResult:
     return RunResult(
         dataset=config.dataset,
         task=config.task,
-        size=config.size,
-        seed=config.seed,
         sweep_idx=config.sweep_idx,
         batch_size=config.batch_size,
         lr=config.lr,
@@ -519,6 +543,7 @@ def train_eval_one(config: RunConfig) -> RunResult:
         num_epochs=config.num_epochs,
         fine_tune_head=config.fine_tune_head,
         model_path=config.model_path,
+        data_dir=config.data_dir,
         best_val_loss=best_val_loss,
         best_val_auroc=best_val_auroc,
         best_val_auprc=best_val_auprc,
@@ -528,9 +553,8 @@ def train_eval_one(config: RunConfig) -> RunResult:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fine-tune SSL models on ICU subsets with validation-only random hyperparameter sweeps."
+        description="Fine-tune SSL models on full ICU datasets with validation-only random hyperparameter sweeps."
     )
-
     parser.add_argument("--debug_pause", action="store_true")
     parser.add_argument("--model_path", required=True, type=str, help="Path to pretrained checkpoint .ckpt")
     parser.add_argument(
@@ -539,7 +563,6 @@ def main():
         choices=["bat", "grud", "radv_transformer", "itransformer", "ipnets", "seft"],
         help="Which pretrained SSL backbone to fine-tune",
     )
-    parser.add_argument("--dataset", default="mimic", type=str, help="Dataset name (eicu, miiv, mimic, or custom)")
     parser.add_argument(
         "--task",
         default="Mortality24",
@@ -547,29 +570,33 @@ def main():
         choices=["Mortality24", "Sepsis", "AKI", "Mortality"],
         help="Task name: determines prediction head and label handling",
     )
-    parser.add_argument("--sizes", default="9506", type=str, help='e.g. "100,500,1000" or "100:9000:100"')
-    parser.add_argument("--seeds", default="42", type=str, help='e.g. "42,84,126"')
     parser.add_argument("--fine_tune_head", action="store_true", help="Only fine-tune the classification head")
     parser.add_argument("--bz", default=32, type=int, help="Batch size")
-    parser.add_argument(
-        "--lr",
-        default=None,
-        type=float,
-        help="Fixed learning rate. Ignored unless --use_fixed_lr is set.",
-    )
+    parser.add_argument("--lr", default=None, type=float, help="Fixed learning rate. Ignored unless --use_fixed_lr is set.")
     parser.add_argument("--num_epochs", default=200, type=int)
+    parser.add_argument("--patience", default=50, type=int, help="Early stopping patience (epochs without improvement). Default: 3")
+
     parser.add_argument(
-        "--patience",
+    "-d",
+    "--data_dir",
+    required=True,
+    type=str,
+    help="Path to the full/raw dataset directory",
+    )
+    parser.add_argument(
+        "--dataset",
         default=None,
-        type=int,
-        help="Early stopping patience (epochs without improvement). Default: 3",
-    )
-    parser.add_argument(
-        "--subset_root",
-        default="icu_benchmarks/data/preprocessed_data",
         type=str,
-        help="Root path that contains {task}/{dataset}/{size}_{seed}/ parquet files",
+        help="Dataset name for logging only. If omitted, inferred from data_dir name.",
     )
+    parser.add_argument("--split_seed", default=2222, type=int, help="Seed used for full-dataset split generation")
+    parser.add_argument("--cv_repetitions", default=1, type=int, help="Number of CV repetitions used by preprocess_data")
+    parser.add_argument("--cv_folds", default=5, type=int, help="Number of CV folds used by preprocess_data")
+    parser.add_argument("--fold_index", default=0, type=int, help="Which fold to use")
+    parser.add_argument("--repetition_index", default=0, type=int, help="Which CV repetition to use")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--load_cache", action="store_true")
+    parser.add_argument("--generate_cache", action="store_true")
 
     # Random sweep args
     parser.add_argument("--num_sweeps", type=int, default=1, help="Number of random hyperparameter sweeps to run")
@@ -587,14 +614,16 @@ def main():
     parser.add_argument("--weight_decay_max", type=float, default=1e-1)
 
     args = parser.parse_args()
+    dataset_name = args.dataset if args.dataset is not None else Path(args.data_dir).resolve().name
+    patience = args.patience
 
-    sizes = parse_int_list(args.sizes)
-    seeds = parse_int_list(args.seeds)
-    patience = args.patience if args.patience is not None else 3
+    task_gin, task_name = get_task_gin_and_name(args.task)
+    gin.parse_config_file(f"configs/tasks/{task_gin}.gin")
+
     mode_str = "head" if args.fine_tune_head else "full"
 
     output_dir = Path(
-        f"finetuning_results/pretrained_{args.model_type.upper()}/{args.task}/{args.dataset}/{mode_str}"
+        f"finetuning_results/pretrained_{args.model_type.upper()}/{args.task}/{dataset_name}/{mode_str}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -622,15 +651,18 @@ def main():
     sweep_meta = {
         "model_type": args.model_type,
         "model_path": args.model_path,
-        "dataset": args.dataset,
+        "dataset": dataset_name,
+        "data_dir": args.data_dir,
         "task": args.task,
-        "sizes": sizes,
-        "seeds": seeds,
         "fine_tune_head": args.fine_tune_head,
         "bz": args.bz,
         "num_epochs": args.num_epochs,
         "patience": patience,
-        "subset_root": args.subset_root,
+        "split_seed": args.split_seed,
+        "cv_repetitions": args.cv_repetitions,
+        "cv_folds": args.cv_folds,
+        "fold_index": args.fold_index,
+        "repetition_index": args.repetition_index,
         "num_sweeps": args.num_sweeps,
         "sweep_seed": args.sweep_seed,
         "dropout_choices": dropout_choices,
@@ -653,8 +685,8 @@ def main():
             {
                 "sweep_id": sweep_id,
                 "args": vars(args),
-                "sizes": sizes,
-                "seeds": seeds,
+                "dataset": dataset_name,
+                "data_dir": args.data_dir,
                 "sampled_combos": sampled_combos,
             },
             f,
@@ -676,42 +708,46 @@ def main():
             f"{'=' * 100}"
         )
 
-        for size in sizes:
-            for seed in seeds:
-                run_cfg = RunConfig(
-                    dataset=args.dataset,
-                    model_type=args.model_type,
-                    size=size,
-                    seed=seed,
-                    model_path=args.model_path,
-                    fine_tune_head=bool(args.fine_tune_head),
-                    batch_size=args.bz,
-                    lr=hp["lr"],
-                    weight_decay=hp["weight_decay"],
-                    dropout=hp["dropout"],
-                    attn_dropout=hp["attn_dropout"],
-                    num_epochs=args.num_epochs,
-                    patience=patience,
-                    subset_root=args.subset_root,
-                    output_dir=str(output_dir),
-                    task=args.task,
-                    debug_pause=bool(args.debug_pause),
-                    sweep_idx=sweep_idx,
-                )
+        run_cfg = RunConfig(
+            data_dir=args.data_dir,
+            dataset=dataset_name,
+            model_type=args.model_type,
+            model_path=args.model_path,
+            fine_tune_head=bool(args.fine_tune_head),
+            batch_size=args.bz,
+            lr=hp["lr"],
+            weight_decay=hp["weight_decay"],
+            dropout=hp["dropout"],
+            attn_dropout=hp["attn_dropout"],
+            num_epochs=args.num_epochs,
+            patience=patience,
+            output_dir=str(output_dir),
+            task=args.task,
+            debug_pause=bool(args.debug_pause),
+            sweep_idx=sweep_idx,
+            split_seed=args.split_seed,
+            cv_repetitions=args.cv_repetitions,
+            cv_folds=args.cv_folds,
+            fold_index=args.fold_index,
+            repetition_index=args.repetition_index,
+            debug=bool(args.debug),
+            load_cache=bool(args.load_cache),
+            generate_cache=bool(args.generate_cache),
+        )
 
-                try:
-                    result = train_eval_one(run_cfg)
-                except Exception as e:
-                    print(
-                        f"[ERROR] sweep={sweep_idx} size={size} seed={seed} "
-                        f"dropout={hp['dropout']} attn_dropout={hp['attn_dropout']} "
-                        f"weight_decay={hp['weight_decay']:.6g} lr={hp['lr']:.6g}: {e}"
-                    )
-                    continue
+        try:
+            result = train_eval_one(run_cfg)
+        except Exception as e:
+            print(
+                f"[ERROR] sweep={sweep_idx} "
+                f"dropout={hp['dropout']} attn_dropout={hp['attn_dropout']} "
+                f"weight_decay={hp['weight_decay']:.6g} lr={hp['lr']:.6g}: {e}"
+            )
+            continue
 
-                all_results.append(result)
-                with per_run_log.open("a") as f:
-                    f.write(json.dumps(asdict(result)) + "\n")
+        all_results.append(result)
+        with per_run_log.open("a") as f:
+            f.write(json.dumps(asdict(result)) + "\n")
 
     if all_results:
         cols = list(asdict(all_results[0]).keys())
